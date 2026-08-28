@@ -17,6 +17,7 @@ import {
   PositiveInt,
   ProjectId,
   ProviderItemId,
+  ResponseAnnotationId,
   ThreadId,
   TrimmedNonEmptyString,
   TrimmedString,
@@ -248,6 +249,59 @@ export type ChatAttachment = typeof ChatAttachment.Type;
 const UploadChatAttachment = Schema.Union([UploadChatImageAttachment]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 
+export const RESPONSE_ANNOTATION_MAX_COUNT = 20;
+export const RESPONSE_ANNOTATION_MAX_SELECTED_TEXT_CHARS = 8_000;
+export const RESPONSE_ANNOTATION_MAX_COMMENT_CHARS = 4_000;
+export const RESPONSE_ANNOTATION_MAX_CONTEXT_CHARS = 128;
+
+const ResponseAnnotationSourceRange = Schema.Struct({
+  start: NonNegativeInt,
+  end: NonNegativeInt,
+  prefix: Schema.String.check(Schema.isMaxLength(RESPONSE_ANNOTATION_MAX_CONTEXT_CHARS)),
+  suffix: Schema.String.check(Schema.isMaxLength(RESPONSE_ANNOTATION_MAX_CONTEXT_CHARS)),
+}).check(
+  Schema.makeFilter(
+    (input) =>
+      input.start < input.end ||
+      new SchemaIssue.InvalidValue({
+        message: "sourceRange.start must be less than sourceRange.end",
+      }),
+    { identifier: "ResponseAnnotationSourceRange" },
+  ),
+);
+export type ResponseAnnotationSourceRange = typeof ResponseAnnotationSourceRange.Type;
+
+export const ResponseAnnotation = Schema.Struct({
+  id: ResponseAnnotationId,
+  sourceMessageId: MessageId,
+  selectedText: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(RESPONSE_ANNOTATION_MAX_SELECTED_TEXT_CHARS),
+  ),
+  sourceRange: ResponseAnnotationSourceRange,
+  comment: Schema.String.check(Schema.isMaxLength(RESPONSE_ANNOTATION_MAX_COMMENT_CHARS)),
+}).check(
+  Schema.makeFilter(
+    (input) =>
+      input.sourceRange.end - input.sourceRange.start === input.selectedText.length ||
+      new SchemaIssue.InvalidValue({
+        message: "sourceRange length must match selectedText length",
+      }),
+    { identifier: "ResponseAnnotation" },
+  ),
+);
+export type ResponseAnnotation = typeof ResponseAnnotation.Type;
+
+export const ResponseAnnotations = Schema.Array(ResponseAnnotation).check(
+  Schema.isMaxLength(RESPONSE_ANNOTATION_MAX_COUNT),
+  Schema.makeFilter(
+    (input) =>
+      new Set(input.map((annotation) => annotation.id)).size === input.length ||
+      new SchemaIssue.InvalidValue({ message: "Response annotation ids must be unique" }),
+    { identifier: "ResponseAnnotations" },
+  ),
+);
+
 export const ProjectScriptIcon = Schema.Literals([
   "play",
   "test",
@@ -356,6 +410,7 @@ export const OrchestrationMessage = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  responseAnnotations: Schema.optional(ResponseAnnotations),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
@@ -962,6 +1017,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
+    responseAnnotations: Schema.optional(ResponseAnnotations),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -983,6 +1039,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
+    responseAnnotations: Schema.optional(ResponseAnnotations),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -1374,6 +1431,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  responseAnnotations: Schema.optional(ResponseAnnotations),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,

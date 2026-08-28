@@ -22,6 +22,11 @@ import {
   OrchestrationThreadShell,
   ProjectCreateCommand,
   OrchestrationMessage,
+  ResponseAnnotation,
+  RESPONSE_ANNOTATION_MAX_COMMENT_CHARS,
+  RESPONSE_ANNOTATION_MAX_CONTEXT_CHARS,
+  RESPONSE_ANNOTATION_MAX_COUNT,
+  RESPONSE_ANNOTATION_MAX_SELECTED_TEXT_CHARS,
   ThreadMessageSentPayload,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
@@ -42,6 +47,7 @@ const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUp
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationMessage = Schema.decodeUnknownEffect(OrchestrationMessage);
+const decodeResponseAnnotation = Schema.decodeUnknownEffect(ResponseAnnotation);
 const decodeThreadMessageSentPayload = Schema.decodeUnknownEffect(ThreadMessageSentPayload);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
@@ -246,6 +252,137 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
     assert.strictEqual(parsed.modelSelection, undefined);
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
+  }),
+);
+
+it.effect("decodes response annotations and keeps legacy messages valid", () =>
+  Effect.gen(function* () {
+    const annotation = yield* decodeResponseAnnotation({
+      id: "annotation-1",
+      sourceMessageId: "assistant-1",
+      selectedText: "selected text",
+      sourceRange: { start: 4, end: 17, prefix: "before ", suffix: " after" },
+      comment: "Please explain this.",
+    });
+    assert.strictEqual(annotation.id, "annotation-1");
+
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-annotations",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-annotations",
+        role: "user",
+        text: "",
+        attachments: [],
+        responseAnnotations: [annotation],
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.deepStrictEqual(parsed.message.responseAnnotations, [annotation]);
+
+    const legacy = yield* decodeOrchestrationMessage({
+      id: "message-legacy",
+      role: "user",
+      text: "old message",
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(legacy.responseAnnotations, undefined);
+  }),
+);
+
+it.effect("enforces response annotation bounds", () =>
+  Effect.gen(function* () {
+    const base = {
+      id: "annotation-1",
+      sourceMessageId: "assistant-1",
+      selectedText: "selected text",
+      sourceRange: { start: 0, end: 13, prefix: "", suffix: "" },
+      comment: "",
+    };
+    const decode = (value: unknown) => decodeResponseAnnotation(value);
+
+    const tooMuchText = yield* Effect.exit(
+      decode({
+        ...base,
+        selectedText: "x".repeat(RESPONSE_ANNOTATION_MAX_SELECTED_TEXT_CHARS + 1),
+      }),
+    );
+    assert.strictEqual(Exit.isFailure(tooMuchText), true);
+
+    const tooMuchComment = yield* Effect.exit(
+      decode({ ...base, comment: "x".repeat(RESPONSE_ANNOTATION_MAX_COMMENT_CHARS + 1) }),
+    );
+    assert.strictEqual(Exit.isFailure(tooMuchComment), true);
+
+    const tooMuchContext = yield* Effect.exit(
+      decode({
+        ...base,
+        sourceRange: {
+          ...base.sourceRange,
+          prefix: "x".repeat(RESPONSE_ANNOTATION_MAX_CONTEXT_CHARS + 1),
+        },
+      }),
+    );
+    assert.strictEqual(Exit.isFailure(tooMuchContext), true);
+
+    const reversedRange = yield* Effect.exit(
+      decode({ ...base, sourceRange: { ...base.sourceRange, start: 14, end: 13 } }),
+    );
+    assert.strictEqual(Exit.isFailure(reversedRange), true);
+
+    const emptyRange = yield* Effect.exit(
+      decode({ ...base, sourceRange: { ...base.sourceRange, start: 13, end: 13 } }),
+    );
+    assert.strictEqual(Exit.isFailure(emptyRange), true);
+
+    const mismatchedRange = yield* Effect.exit(
+      decode({ ...base, sourceRange: { ...base.sourceRange, end: 12 } }),
+    );
+    assert.strictEqual(Exit.isFailure(mismatchedRange), true);
+
+    const tooMany = yield* Effect.exit(
+      decodeThreadTurnStartCommand({
+        type: "thread.turn.start",
+        commandId: "cmd-turn-too-many-annotations",
+        threadId: "thread-1",
+        message: {
+          messageId: "msg-too-many-annotations",
+          role: "user",
+          text: "",
+          attachments: [],
+          responseAnnotations: Array.from(
+            { length: RESPONSE_ANNOTATION_MAX_COUNT + 1 },
+            (_, i) => ({
+              ...base,
+              id: `annotation-${i}`,
+            }),
+          ),
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(Exit.isFailure(tooMany), true);
+
+    const duplicateIds = yield* Effect.exit(
+      decodeThreadTurnStartCommand({
+        type: "thread.turn.start",
+        commandId: "cmd-turn-duplicate-annotation-ids",
+        threadId: "thread-1",
+        message: {
+          messageId: "msg-duplicate-annotation-ids",
+          role: "user",
+          text: "",
+          attachments: [],
+          responseAnnotations: [base, { ...base }],
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(Exit.isFailure(duplicateIds), true);
   }),
 );
 

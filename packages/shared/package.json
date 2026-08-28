@@ -258,6 +258,10 @@
     "./nodeSqliteClient": {
       "types": "./src/nodeSqliteClient.ts",
       "import": "./src/nodeSqliteClient.ts"
+    },
+    "./responseAnnotations": {
+      "types": "./src/responseAnnotations.ts",
+      "import": "./src/responseAnnotations.ts"
     }
   },
   "scripts": {

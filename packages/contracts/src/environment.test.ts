@@ -27,6 +27,28 @@ describe("ExecutionEnvironmentDescriptor", () => {
     ).toBe(true);
   });
 
+  it("treats a missing response-annotation capability as unsupported", () => {
+    expect(decodeDescriptor(descriptor).capabilities.responseAnnotations).toBeUndefined();
+  });
+
+  it("preserves an advertised response-annotation capability", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, responseAnnotations: true },
+      }).capabilities.responseAnnotations,
+    ).toBe(true);
+  });
+
+  it("preserves an explicitly unsupported response-annotation capability", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, responseAnnotations: false },
+      }).capabilities.responseAnnotations,
+    ).toBe(false);
+  });
+
   it("treats a missing attachment upload capability as unsupported", () => {
     expect(decodeDescriptor(descriptor).capabilities.attachmentUploads).toBeUndefined();
   });
