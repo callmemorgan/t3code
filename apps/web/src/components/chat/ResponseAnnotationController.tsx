@@ -28,7 +28,6 @@ import {
 } from "../../lib/responseAnnotations";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
-import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const EMPTY_RESPONSE_ANNOTATIONS: ReadonlyArray<ResponseAnnotation> = [];
@@ -562,9 +561,8 @@ function ResponseAnnotationEditor({
         if (editable && onSave && comment !== annotation.comment) onSave(comment);
       }}
     >
-      <Textarea
+      <textarea
         ref={textareaRef}
-        unstyled
         value={comment}
         maxLength={RESPONSE_ANNOTATION_MAX_COMMENT_CHARS}
         aria-label="Annotation comment"
