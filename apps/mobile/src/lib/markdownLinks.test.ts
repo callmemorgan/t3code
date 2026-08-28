@@ -120,4 +120,11 @@ describe("resolveMarkdownLinkPresentation", () => {
       href: null,
     });
   });
+
+  it("preserves internal response annotation links for the renderer", () => {
+    expect(resolveMarkdownLinkPresentation("t3://response-annotation/2/annotation-2")).toEqual({
+      kind: "link",
+      href: "t3://response-annotation/2/annotation-2",
+    });
+  });
 });

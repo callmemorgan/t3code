@@ -6,6 +6,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  ResponseAnnotationId,
   ThreadId,
   TurnId,
   type OrchestrationThread,
@@ -672,6 +673,42 @@ describe("buildThreadFeed", () => {
       ]);
     },
   );
+
+  it("keeps annotation-only user messages so their summaries can render", () => {
+    const userMessage = {
+      id: MessageId.make("annotation-only-user"),
+      role: "user" as const,
+      text: "",
+      responseAnnotations: [
+        {
+          id: ResponseAnnotationId.make("annotation-1"),
+          sourceMessageId: MessageId.make("source-assistant"),
+          selectedText: "selected text",
+          sourceRange: { start: 0, end: 13, prefix: "", suffix: "" },
+          comment: "Please revisit this.",
+        },
+      ],
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-08-23T00:00:00.000Z",
+      updatedAt: "2026-08-23T00:00:00.000Z",
+    };
+    const feed = buildThreadFeed(
+      makeThread({
+        id: ThreadId.make("thread-annotation-only"),
+        projectId: ProjectId.make("project-1"),
+        title: "Annotation-only turn",
+        messages: [userMessage],
+      }),
+    );
+
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({
+      type: "message",
+      id: "annotation-only-user",
+      message: { responseAnnotations: userMessage.responseAnnotations },
+    });
+  });
 
   it("keeps older local feedback before newer messages returned by the server", () => {
     const submission = {

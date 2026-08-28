@@ -1257,7 +1257,8 @@ function isEmptyMessage(entry: RawThreadFeedEntry): boolean {
   }
   const hasText = entry.message.text.trim().length > 0;
   const hasAttachments = (entry.message.attachments ?? []).length > 0;
-  return !hasText && !hasAttachments;
+  const hasResponseAnnotations = (entry.message.responseAnnotations ?? []).length > 0;
+  return !hasText && !hasAttachments && !hasResponseAnnotations;
 }
 
 function groupAdjacentActivities(entries: ReadonlyArray<RawThreadFeedEntry>): ThreadFeedEntry[] {

@@ -8,6 +8,7 @@ import type {
   ChatImageAttachment,
   EnvironmentId,
   MessageId,
+  ResponseAnnotation,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -180,6 +181,12 @@ import {
 } from "../files/filePath";
 import { MARKDOWN_IMAGE_MAX_WIDTH, resolveMarkdownImageDisplaySize } from "./markdownImageSize";
 import { fileChipMenu, resolveFileChipTarget, type FileChipAction } from "./fileChipMenu";
+import { ResponseAnnotationSummary } from "./ResponseAnnotationSummary";
+import {
+  deriveResponseAnnotationTurnContext,
+  prepareResponseAnnotationMarkdown,
+  responseAnnotationReferenceFromHref,
+} from "./responseAnnotations";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   // Native iOS blockquotes and adjacent selectable text are separate layout
@@ -1250,13 +1257,7 @@ function useMarkdownStyles(
           <MarkdownLinkLabelContext.Provider value>
             <NativeText
               className="underline"
-              onPress={
-                linkHref
-                  ? () => {
-                      void tryOpenExternalUrl(linkHref, "markdown-link");
-                    }
-                  : undefined
-              }
+              onPress={linkHref ? () => onLinkPress(linkHref) : undefined}
               style={{ color: markdownLinkColor }}
             >
               {children}
@@ -1495,6 +1496,8 @@ function renderFeedEntry(
     readonly onPressPreview: (source: FilePreviewSource) => void;
     readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
     readonly markdownLinkHandlers: MarkdownLinkHandlers;
+    readonly onResponseAnnotationPress: (annotation: ResponseAnnotation, index: number) => void;
+    readonly responseAnnotationsByTurnId: ReadonlyMap<TurnId, ReadonlyArray<ResponseAnnotation>>;
     readonly renderMarkdownImage: MarkdownImageRenderer;
     readonly renderViewedImage: MarkdownImageRenderer;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
@@ -1604,60 +1607,94 @@ function renderFeedEntry(
       props.terminalAssistantMessageIds.has(message.id) &&
       !assistantTurnStillInProgress &&
       !message.streaming;
+    const responseAnnotations =
+      message.role === "assistant" && message.turnId !== null
+        ? (props.responseAnnotationsByTurnId.get(message.turnId) ?? [])
+        : [];
+    const assistantMarkdown =
+      message.role === "assistant" && renderedText.includes(':codex-annotation{index="')
+        ? prepareResponseAnnotationMarkdown(renderedText, responseAnnotations)
+        : renderedText;
+    const assistantMarkdownLinkHandlers =
+      message.role === "assistant"
+        ? {
+            ...props.markdownLinkHandlers,
+            onLinkPress: (href: string) => {
+              const reference = responseAnnotationReferenceFromHref(href);
+              if (reference !== null) {
+                const annotation = responseAnnotations[reference.index - 1];
+                if (annotation?.id === reference.annotationId) {
+                  props.onResponseAnnotationPress(annotation, reference.index);
+                }
+                return;
+              }
+              props.markdownLinkHandlers.onLinkPress(href);
+            },
+          }
+        : props.markdownLinkHandlers;
 
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
+      const hasUserContent = message.text.trim().length > 0 || attachments.length > 0;
       return (
         <Animated.View
           className="mb-5 items-end"
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
-          <View
-            className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
-            style={{
-              backgroundColor: userBubbleColor,
-              maxWidth: props.userBubbleMaxWidth,
-              ...(hasReviewCommentContext
-                ? { width: props.reviewCommentBubbleWidth }
-                : hasWideBlock
-                  ? { width: props.userBubbleMaxWidth }
-                  : null),
-            }}
-          >
-            {message.text.trim().length > 0 ? (
-              <UserMessageContent
-                text={renderedText}
-                markdownStyles={styles}
-                reviewCommentColors={props.reviewCommentColors}
-                skills={props.skills}
-                linkHandlers={props.markdownLinkHandlers}
-                renderImage={props.renderMarkdownImage}
-              />
-            ) : null}
-            {attachments.map((attachment) => {
-              return isImageAttachment(attachment) ? (
-                <MessageAttachmentImage
-                  key={attachment.id}
-                  environmentId={props.environmentId}
-                  attachmentId={attachment.id}
-                  name={attachment.name}
-                  mimeType={attachment.mimeType}
-                  className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
-                  onPressPreview={props.onPressPreview}
+          {hasUserContent ? (
+            <View
+              className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
+              style={{
+                backgroundColor: userBubbleColor,
+                maxWidth: props.userBubbleMaxWidth,
+                ...(hasReviewCommentContext
+                  ? { width: props.reviewCommentBubbleWidth }
+                  : hasWideBlock
+                    ? { width: props.userBubbleMaxWidth }
+                    : null),
+              }}
+            >
+              {message.text.trim().length > 0 ? (
+                <UserMessageContent
+                  text={renderedText}
+                  markdownStyles={styles}
+                  reviewCommentColors={props.reviewCommentColors}
+                  skills={props.skills}
+                  linkHandlers={props.markdownLinkHandlers}
+                  renderImage={props.renderMarkdownImage}
                 />
-              ) : isFileAttachment(attachment) ? (
-                <MessageAttachmentFile
-                  key={attachment.id}
-                  environmentId={props.environmentId}
-                  attachment={attachment}
-                  onPressPreview={props.onPressPreview}
-                  onPressVideo={props.onPressVideo}
-                />
-              ) : (
-                <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
-              );
-            })}
-          </View>
+              ) : null}
+              {attachments.map((attachment) => {
+                return isImageAttachment(attachment) ? (
+                  <MessageAttachmentImage
+                    key={attachment.id}
+                    environmentId={props.environmentId}
+                    attachmentId={attachment.id}
+                    name={attachment.name}
+                    mimeType={attachment.mimeType}
+                    className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
+                    onPressPreview={props.onPressPreview}
+                  />
+                ) : isFileAttachment(attachment) ? (
+                  <MessageAttachmentFile
+                    key={attachment.id}
+                    environmentId={props.environmentId}
+                    attachment={attachment}
+                    onPressPreview={props.onPressPreview}
+                    onPressVideo={props.onPressVideo}
+                  />
+                ) : (
+                  <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
+                );
+              })}
+            </View>
+          ) : null}
+          {message.responseAnnotations && message.responseAnnotations.length > 0 ? (
+            <ResponseAnnotationSummary
+              annotations={message.responseAnnotations}
+              onSelect={props.onResponseAnnotationPress}
+            />
+          ) : null}
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             <Text className="font-t3-medium text-xs tabular-nums text-adaptive-neutral-600-400">
               {timestampLabel}
@@ -1688,11 +1725,11 @@ function renderFeedEntry(
         className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-1 px-1")}
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
-        {renderedText.trim().length > 0 ? (
+        {assistantMarkdown.trim().length > 0 ? (
           <AssistantMarkdownContent
-            markdown={renderedText}
+            markdown={assistantMarkdown}
             markdownStyles={styles}
-            linkHandlers={props.markdownLinkHandlers}
+            linkHandlers={assistantMarkdownLinkHandlers}
             onUseArtifactTemplate={props.onUseArtifactTemplate}
             renderImage={props.renderMarkdownImage}
             skills={props.skills}
@@ -2107,6 +2144,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setExpandedVideo(null);
     setExpandedFile(null);
   }, [props.environmentId, props.threadId, props.contentPresentation.kind]);
+  const responseAnnotationTurnContext = useMemo(
+    () => deriveResponseAnnotationTurnContext(props.feed),
+    [props.feed],
+  );
+  const onResponseAnnotationPressRef = useRef<
+    ((annotation: ResponseAnnotation, index: number) => void) | null
+  >(null);
   const horizontalPadding = props.layoutVariant === "split" ? 20 : 16;
   const contentHorizontalPadding = deriveCenteredContentHorizontalPadding({
     viewportWidth,
@@ -2143,6 +2187,16 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const userBubbleColor = theme["--color-user-bubble"];
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
+      const annotationReference = responseAnnotationReferenceFromHref(href);
+      if (annotationReference !== null) {
+        const annotation = responseAnnotationTurnContext.annotationsById.get(
+          annotationReference.annotationId,
+        );
+        if (annotation !== undefined) {
+          onResponseAnnotationPressRef.current?.(annotation, annotationReference.index);
+        }
+        return;
+      }
       const presentation = resolveMarkdownLinkPresentation(href);
       if (presentation.kind === "file") {
         const relativePath = resolveWorkspaceRelativeFilePath(
@@ -2231,7 +2285,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         void tryOpenExternalUrl(presentation.href, "markdown-link");
       }
     },
-    [props.environmentId, props.threadId, props.workspaceRoot, navigation],
+    [
+      navigation,
+      props.environmentId,
+      props.threadId,
+      props.workspaceRoot,
+      responseAnnotationTurnContext.annotationsById,
+    ],
   );
   const markdownLinkHandlers = useMemo<MarkdownLinkHandlers>(
     () => ({
@@ -2341,6 +2401,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const markdownStyles = useMarkdownStyles(onMarkdownLinkPress, renderMarkdownImage);
   const reviewCommentColors = useReviewCommentColors();
+
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
   // Keep row-local interaction props in extraData so disclosures and copy feedback repaint.
   const listAppearanceData = useMemo(
@@ -2352,6 +2413,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       markdownStyles,
       reviewCommentColors,
       themeAppearance,
+      responseAnnotationsByTurnId: responseAnnotationTurnContext.annotationsByTurnId,
       userBubbleColor,
       viewportWidth,
     }),
@@ -2363,6 +2425,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       markdownStyles,
       reviewCommentColors,
       themeAppearance,
+      responseAnnotationTurnContext.annotationsByTurnId,
       userBubbleColor,
       viewportWidth,
     ],
@@ -2515,10 +2578,142 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.latestTurn,
     ],
   );
-  // The empty↔filled key below remounts the list and resets its imperative
-  // content-inset override. Seed the fresh instance synchronously with the
-  // current overlay height before the scroll integration's next reaction;
-  // on Android the declarative contentInset floor covers this same window.
+  const [pendingResponseAnnotationSourceId, setPendingResponseAnnotationSourceId] =
+    useState<MessageId | null>(null);
+  useEffect(() => {
+    setPendingResponseAnnotationSourceId(null);
+  }, [feedThreadKey]);
+  const requestOlderTurnsForResponseAnnotation = useCallback(() => {
+    if (
+      props.loadEarlier === null ||
+      props.loadEarlier === undefined ||
+      props.loadEarlier.loading
+    ) {
+      return;
+    }
+    // The request registry coalesces duplicate requests and the state machine
+    // checks its own loading flag. That lets a stale/reverted page response
+    // retry even when the visible feed keeps the same array identity.
+    props.loadEarlier.onLoadEarlier();
+  }, [props.loadEarlier]);
+
+  const scrollToResponseAnnotationSourceMessage = useCallback(
+    (sourceMessageId: MessageId) => {
+      const sourceIndex = presentedFeed.findIndex(
+        (entry) => entry.type === "message" && entry.message.id === sourceMessageId,
+      );
+      if (sourceIndex >= 0) {
+        setPendingResponseAnnotationSourceId(null);
+        requestAnimationFrame(() => {
+          props.listRef.current?.scrollToIndex({
+            index: sourceIndex,
+            animated: true,
+            viewPosition: 0.3,
+          });
+        });
+        return;
+      }
+
+      const sourceEntry = props.feed.find(
+        (entry) => entry.type === "message" && entry.message.id === sourceMessageId,
+      );
+      const sourceTurnId =
+        sourceEntry?.type === "message" && sourceEntry.message.role === "assistant"
+          ? sourceEntry.message.turnId
+          : null;
+      if (
+        sourceEntry?.type === "message" &&
+        sourceTurnId !== null &&
+        !expandedTurnIds.has(sourceTurnId)
+      ) {
+        setPendingResponseAnnotationSourceId(sourceMessageId);
+        setInteractionState((current) => ({
+          ...current,
+          expandedTurnIds: new Set(current.expandedTurnIds).add(sourceTurnId),
+        }));
+        return;
+      }
+
+      if (props.loadEarlier !== null && props.loadEarlier !== undefined) {
+        setPendingResponseAnnotationSourceId(sourceMessageId);
+        requestOlderTurnsForResponseAnnotation();
+      } else {
+        setPendingResponseAnnotationSourceId(null);
+      }
+    },
+    [
+      expandedTurnIds,
+      presentedFeed,
+      props.feed,
+      props.listRef,
+      props.loadEarlier,
+      requestOlderTurnsForResponseAnnotation,
+    ],
+  );
+
+  useEffect(() => {
+    if (pendingResponseAnnotationSourceId === null) {
+      return;
+    }
+    const sourceIndex = presentedFeed.findIndex(
+      (entry) => entry.type === "message" && entry.message.id === pendingResponseAnnotationSourceId,
+    );
+    if (sourceIndex >= 0) {
+      setPendingResponseAnnotationSourceId(null);
+      const targetIndex = sourceIndex;
+      requestAnimationFrame(() => {
+        props.listRef.current?.scrollToIndex({
+          index: targetIndex,
+          animated: true,
+          viewPosition: 0.3,
+        });
+      });
+      return;
+    }
+    if (props.loadEarlier === null || props.loadEarlier === undefined) {
+      setPendingResponseAnnotationSourceId(null);
+      return;
+    }
+    requestOlderTurnsForResponseAnnotation();
+  }, [
+    pendingResponseAnnotationSourceId,
+    presentedFeed,
+    props.listRef,
+    props.loadEarlier,
+    requestOlderTurnsForResponseAnnotation,
+  ]);
+
+  const scrollToResponseAnnotationSource = useCallback(
+    (annotation: ResponseAnnotation) => {
+      scrollToResponseAnnotationSourceMessage(annotation.sourceMessageId);
+    },
+    [scrollToResponseAnnotationSourceMessage],
+  );
+  const onResponseAnnotationPress = useCallback(
+    (annotation: ResponseAnnotation, index: number) => {
+      void Haptics.selectionAsync();
+      scrollToResponseAnnotationSource(annotation);
+      const selectedText = annotation.selectedText.trim();
+      const comment = annotation.comment.trim();
+      const detail = comment.length > 0 ? `${selectedText}\n\n${comment}` : selectedText;
+      Alert.alert(`Annotation ${index}`, detail, [{ text: "OK", style: "cancel" }]);
+    },
+    [scrollToResponseAnnotationSource],
+  );
+  useEffect(() => {
+    onResponseAnnotationPressRef.current = onResponseAnnotationPress;
+    return () => {
+      onResponseAnnotationPressRef.current = null;
+    };
+  }, [onResponseAnnotationPress]);
+
+  // The empty↔filled key below remounts the list, which resets its imperative
+  // content-inset override — and useKeyboardChatComposerInset (mounted above
+  // the remount boundary) deduplicates by height, so it never re-reports the
+  // composer inset to the fresh instance. Re-report the measured overlay height
+  // (composer plus any pending approval / user-input card) so the remounted
+  // list's scroll math gets the true value; on Android the declarative
+  // contentInset floor below covers the window before this effect lands.
   const listMountKey = `${feedThreadKey}:${props.feed.length === 0 ? "empty" : "filled"}`;
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
@@ -2784,6 +2979,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onPressPreview,
             onPressVideo,
             markdownLinkHandlers,
+            onResponseAnnotationPress,
+            responseAnnotationsByTurnId: responseAnnotationTurnContext.annotationsByTurnId,
             renderMarkdownImage,
             renderViewedImage,
             iconSubtleColor,
@@ -2818,6 +3015,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       markdownLinkHandlers,
       onPressPreview,
       onPressVideo,
+      onResponseAnnotationPress,
       onToggleTurnFold,
       onToggleWorkGroup,
       onToggleWorkRow,
@@ -2826,6 +3024,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.skills,
       renderMarkdownImage,
       renderViewedImage,
+      responseAnnotationTurnContext.annotationsByTurnId,
     ],
   );
 

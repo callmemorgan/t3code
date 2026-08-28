@@ -10,6 +10,7 @@ import { videoMimeType } from "@t3tools/shared/video";
 import type { MARKDOWN_FILE_ICON_SOURCES } from "./markdownFileIcons.generated";
 
 const POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
+const T3_RESPONSE_ANNOTATION_HREF_PATTERN = /^t3:\/\/response-annotation\/[1-9][0-9]*\/[^/?#]+$/;
 
 export type MarkdownLinkPresentation =
   | {
@@ -253,6 +254,9 @@ export function resolveMarkdownFileIcon(value: string): MarkdownFileIcon {
 
 export function resolveMarkdownLinkPresentation(href: string): MarkdownLinkPresentation {
   const normalized = normalizeMarkdownLinkDestination(href);
+  if (T3_RESPONSE_ANNOTATION_HREF_PATTERN.test(normalized)) {
+    return { kind: "link", href: normalized };
+  }
   try {
     const parsed = new URL(normalizeNativeMarkdownUrl(normalized));
     if (parsed.protocol === "http:" || parsed.protocol === "https:") {
