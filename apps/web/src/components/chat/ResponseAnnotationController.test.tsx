@@ -7,6 +7,7 @@ import {
   deriveResponseAnnotationNumbers,
   isResponseAnnotationSelectionContained,
   responseAnnotationActionPosition,
+  responseAnnotationEditorPresentation,
   responseAnnotationEditorPosition,
   responseAnnotationMarkerPosition,
   ResponseAnnotationSourceMarkers,
@@ -117,6 +118,19 @@ describe("response annotation timeline controller", () => {
     expect(editor.height).toBe(148);
     expect(editor.top).toBe(16);
     expect(editor.top + editor.height).toBeLessThanOrEqual(164);
+  });
+
+  it("keeps sent annotation panels read-only", () => {
+    expect(responseAnnotationEditorPresentation(3, false)).toEqual({
+      ariaLabel: "View Annotation 3",
+      closeLabel: "Close",
+      readOnly: true,
+    });
+    expect(responseAnnotationEditorPresentation(3, true)).toEqual({
+      ariaLabel: "Edit Annotation 3",
+      closeLabel: "Cancel",
+      readOnly: false,
+    });
   });
 
   it("anchors a source marker just above the selected text endpoint", () => {
