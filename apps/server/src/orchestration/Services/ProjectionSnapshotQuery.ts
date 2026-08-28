@@ -9,6 +9,7 @@
 import type {
   ApprovalRequestId,
   CheckpointRef,
+  MessageId,
   OrchestrationCheckpointSummary,
   OrchestrationProject,
   OrchestrationProjectShell,
@@ -42,6 +43,11 @@ export interface ProjectionSnapshotSequence {
 export interface ProjectionEventReplayStats {
   readonly eventCount: number;
   readonly payloadBytes: number;
+}
+
+export interface AssistantMessageIdsLookup {
+  readonly threadId: ThreadId;
+  readonly messageIds: ReadonlyArray<MessageId>;
 }
 
 export interface ProjectionThreadCheckpointContext {
@@ -88,6 +94,19 @@ export interface ProjectionSnapshotQueryShape {
     OrchestrationReadModel,
     ProjectionRepositoryError
   >;
+
+  /**
+   * Read which candidate message ids are completed assistant messages owned
+   * by a thread. This intentionally returns only the requested ids so
+   * annotated turn validation does not hydrate the thread's message history.
+   *
+   * Optional keeps lightweight test implementations source-compatible; the
+   * production snapshot query provides it and the engine fails closed when
+   * it is unavailable for an annotated turn.
+   */
+  readonly getAssistantMessageIds?: (
+    input: AssistantMessageIdsLookup,
+  ) => Effect.Effect<ReadonlyArray<MessageId>, ProjectionRepositoryError>;
 
   /**
    * Read the latest orchestration projection snapshot.

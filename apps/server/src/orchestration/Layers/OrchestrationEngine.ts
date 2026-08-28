@@ -40,7 +40,10 @@ import {
   type OrchestrationDispatchError,
   type OrchestrationProjectorDecodeError,
 } from "../Errors.ts";
-import { decideOrchestrationCommand } from "../decider.ts";
+import {
+  decideOrchestrationCommand,
+  type OrchestrationCommandValidationContext,
+} from "../decider.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -201,12 +204,32 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           envelope.command.type === "thread.user-input.respond"
             ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
             : Option.none();
+        let validationContext: OrchestrationCommandValidationContext | undefined;
+        if (envelope.command.type === "thread.turn.start") {
+          const responseAnnotations = envelope.command.message.responseAnnotations;
+          if (responseAnnotations !== undefined && responseAnnotations.length > 0) {
+            const getAssistantMessageIds = projectionSnapshotQuery.getAssistantMessageIds;
+            if (getAssistantMessageIds === undefined) {
+              return yield* new OrchestrationCommandInvariantError({
+                commandType: envelope.command.type,
+                detail: "Response annotation source validation is unavailable.",
+              });
+            }
+            const assistantMessageIds = yield* getAssistantMessageIds({
+              threadId: envelope.command.threadId,
+              messageIds: responseAnnotations.map((annotation) => annotation.sourceMessageId),
+            });
+            validationContext = { assistantMessageIds: new Set(assistantMessageIds) };
+          }
+        }
+
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
           readModel: commandReadModel,
           ...(Option.isSome(userInputActivity)
             ? { userInputActivity: userInputActivity.value }
             : {}),
+          ...(validationContext === undefined ? {} : { validationContext }),
         }).pipe(
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.mapError((cause) =>

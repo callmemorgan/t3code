@@ -22,6 +22,7 @@ import {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ThreadId,
   TurnId,
   type ProviderInstanceId,
@@ -902,6 +903,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         : [inputTextWithCitations, attachmentPathLines.join("\n")]
             .filter((part): part is string => typeof part === "string" && part.length > 0)
             .join("\n\n");
+
+    if (
+      inputTextWithAttachmentPaths !== undefined &&
+      inputTextWithAttachmentPaths.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+    ) {
+      return yield* toValidationError(
+        "ProviderService.sendTurn",
+        `Provider input must be at most ${PROVIDER_SEND_TURN_MAX_INPUT_CHARS} characters after attachment paths are appended`,
+      );
+    }
 
     const input = {
       ...parsed,

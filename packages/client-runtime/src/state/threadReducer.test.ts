@@ -7,6 +7,7 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  ResponseAnnotationId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -447,6 +448,42 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.latestTurn?.turnId).toBe("turn-1");
         expect(result.thread.latestTurn?.state).toBe("completed");
         expect(result.thread.latestTurn?.assistantMessageId).toBe("msg-3");
+      }
+    });
+
+    it("keeps response annotations on user messages", () => {
+      const responseAnnotations = [
+        {
+          id: ResponseAnnotationId.make("annotation-1"),
+          sourceMessageId: MessageId.make("assistant-source"),
+          selectedText: "selected",
+          sourceRange: { start: 0, end: 8, prefix: "", suffix: "" },
+          comment: "Explain this.",
+        },
+      ];
+      const result = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T08:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-annotations"),
+          role: "user",
+          text: "Please explain.",
+          responseAnnotations,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-01T08:00:00.000Z",
+          updatedAt: "2026-04-01T08:00:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages[0]?.responseAnnotations).toEqual(responseAnnotations);
       }
     });
 

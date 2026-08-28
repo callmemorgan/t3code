@@ -26,6 +26,7 @@ import {
   type OrchestrationThreadShell,
   ModelSelection,
   ProjectId,
+  ResponseAnnotation,
   ThreadLinkedPullRequest,
   ThreadId,
 } from "@t3tools/contracts";
@@ -94,6 +95,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    responseAnnotations: Schema.NullOr(Schema.fromJsonString(Schema.Array(ResponseAnnotation))),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -168,6 +170,13 @@ const ThreadActivityKindsLookupInput = Schema.Struct({
 });
 const ThreadActivityIdsLookupInput = Schema.Struct({
   activityIds: Schema.Array(ProjectionThreadActivity.fields.activityId),
+});
+const AssistantMessageIdsLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  messageIds: Schema.Array(MessageId),
+});
+const AssistantMessageIdLookupRowSchema = Schema.Struct({
+  messageId: MessageId,
 });
 // Windowed reads order turns by the stable keyset (anchor, turn key), where
 // anchor is requested_at and turn key is
@@ -587,6 +596,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          response_annotations_json AS "responseAnnotations",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -1050,12 +1060,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          response_annotations_json AS "responseAnnotations",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
         WHERE thread_id = ${threadId}
         ORDER BY created_at ASC, message_id ASC
+      `,
+  });
+
+  const listAssistantMessageIdsByThread = SqlSchema.findAll({
+    Request: AssistantMessageIdsLookupInput,
+    Result: AssistantMessageIdLookupRowSchema,
+    execute: ({ threadId, messageIds }) =>
+      sql`
+        SELECT message_id AS "messageId"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND role = 'assistant'
+          AND is_streaming = 0
+          AND ${sql.in("message_id", messageIds)}
+        ORDER BY message_id ASC
       `,
   });
 
@@ -1407,6 +1433,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          response_annotations_json AS "responseAnnotations",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -1806,6 +1833,9 @@ pending_approval_requests AS (
                   role: row.role,
                   text: row.text,
                   ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+                  ...(row.responseAnnotations !== null
+                    ? { responseAnnotations: row.responseAnnotations }
+                    : {}),
                   turnId: row.turnId,
                   streaming: row.isStreaming === 1,
                   createdAt: row.createdAt,
@@ -2557,6 +2587,27 @@ pending_approval_requests AS (
     };
   });
 
+  const getAssistantMessageIds: NonNullable<
+    ProjectionSnapshotQueryShape["getAssistantMessageIds"]
+  > = Effect.fn("ProjectionSnapshotQuery.getAssistantMessageIds")(function* ({
+    threadId,
+    messageIds,
+  }) {
+    if (messageIds.length === 0) {
+      return [];
+    }
+
+    const rows = yield* listAssistantMessageIdsByThread({ threadId, messageIds }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getAssistantMessageIds:query",
+          "ProjectionSnapshotQuery.getAssistantMessageIds:decodeRows",
+        ),
+      ),
+    );
+    return rows.map((row) => row.messageId);
+  });
+
   const getActiveProjectByWorkspaceRoot: ProjectionSnapshotQueryShape["getActiveProjectByWorkspaceRoot"] =
     (workspaceRoot) =>
       getActiveProjectRowByWorkspaceRoot({ workspaceRoot }).pipe(
@@ -3002,7 +3053,10 @@ pending_approval_requests AS (
             updatedAt: row.updatedAt,
           };
           if (row.attachments !== null) {
-            return Object.assign(message, { attachments: row.attachments });
+            Object.assign(message, { attachments: row.attachments });
+          }
+          if (row.responseAnnotations !== null) {
+            Object.assign(message, { responseAnnotations: row.responseAnnotations });
           }
           return message;
         }),
@@ -3187,6 +3241,7 @@ pending_approval_requests AS (
   return {
     getCommandReadModel,
     getUserInputActivity,
+    getAssistantMessageIds,
     getSnapshot,
     getShellSnapshot,
     getArchivedShellSnapshot,

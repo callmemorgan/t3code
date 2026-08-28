@@ -23,6 +23,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionStartInput,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -1625,6 +1626,38 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepEqual(fileOnlyInput.attachments, [fileAttachment]);
 
       yield* provider.stopSession({ threadId: session.threadId });
+    }),
+  );
+
+  it.effect("rejects a turn when attachment paths push the final input over the limit", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const session = yield* provider.startSession(asThreadId("thread-attach-limit"), {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-attach-limit"),
+        runtimeMode: "full-access",
+      });
+      const attachment = {
+        type: "image" as const,
+        id: "thread-attach-limit-12345678-1234-1234-1234-123456789abc",
+        name: "screenshot.png",
+        mimeType: "image/png",
+        sizeBytes: 123,
+      };
+      routing.codex.sendTurn.mockClear();
+
+      const failure = yield* provider
+        .sendTurn({
+          threadId: session.threadId,
+          input: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          attachments: [attachment],
+        })
+        .pipe(Effect.flip);
+
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "after attachment paths are appended");
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 0);
     }),
   );
 

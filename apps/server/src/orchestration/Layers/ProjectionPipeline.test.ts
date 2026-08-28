@@ -6,6 +6,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ResponseAnnotationId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
@@ -394,6 +395,91 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
     );
   },
 );
+
+it.layer(
+  Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-response-annotations-")),
+)("OrchestrationProjectionPipeline", (it) => {
+  it.effect("stores response annotations and preserves them on later message updates", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-response-annotations");
+      const messageId = MessageId.make("message-response-annotations");
+      const responseAnnotations = [
+        {
+          id: ResponseAnnotationId.make("annotation-1"),
+          sourceMessageId: MessageId.make("assistant-source-1"),
+          selectedText: "selected text",
+          sourceRange: { start: 3, end: 16, prefix: "a ", suffix: " b" },
+          comment: "Explain this.",
+        },
+      ];
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-response-annotations-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-response-annotations-1"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-response-annotations-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "Please explain.",
+          responseAnnotations,
+          turnId: null,
+          streaming: false,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-response-annotations-2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: CommandId.make("cmd-response-annotations-2"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-response-annotations-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "Please explain more.",
+          turnId: null,
+          streaming: false,
+          createdAt: now,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{
+        readonly text: string;
+        readonly responseAnnotationsJson: string | null;
+      }>`
+        SELECT
+          text,
+          response_annotations_json AS "responseAnnotationsJson"
+        FROM projection_thread_messages
+        WHERE message_id = ${messageId}
+      `;
+      assert.equal(rows[0]?.text, "Please explain more.");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(rows[0]?.responseAnnotationsJson ?? "null"), responseAnnotations);
+    }),
+  );
+});
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-attachments-safe-")))(
   "OrchestrationProjectionPipeline",
@@ -3389,6 +3475,164 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       ),
     ),
   ),
+);
+
+it.effect(
+  "accepts an annotated turn after restart when its source is outside the command model cap",
+  () =>
+    Effect.gen(function* () {
+      const { dbPath } = yield* ServerConfig;
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const makeEngineLayer = () =>
+        OrchestrationEngineLive.pipe(
+          Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+          Layer.provide(ThreadBackgroundLiveness.layer),
+          Layer.provide(ThreadPlanProgress.layer),
+          Layer.provide(OrchestrationProjectionPipelineLive),
+          Layer.provide(OrchestrationEventStoreLive),
+          Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+          Layer.provide(RepositoryIdentityResolver.layer),
+          Layer.provideMerge(persistenceLayer),
+          Layer.provideMerge(NodeServices.layer),
+        );
+      const projectId = ProjectId.make("project-annotation-restart");
+      const threadId = ThreadId.make("thread-annotation-restart");
+      const sourceMessageId = MessageId.make("assistant-annotation-source");
+      const sourceText = "old source answer";
+      const responseAnnotations = [
+        {
+          id: ResponseAnnotationId.make("annotation-after-restart"),
+          sourceMessageId,
+          selectedText: sourceText,
+          sourceRange: { start: 0, end: sourceText.length, prefix: "", suffix: "" },
+          comment: "Explain this old answer.",
+        },
+      ];
+      const createdAt = "2026-03-04T00:00:00.000Z";
+
+      yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-annotation-restart-project"),
+          projectId,
+          title: "Annotation Restart Project",
+          workspaceRoot: "/tmp/project-annotation-restart",
+          defaultModelSelection: null,
+          createdAt,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-annotation-restart-thread"),
+          threadId,
+          projectId,
+          title: "Annotation Restart Thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        });
+        yield* engine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: CommandId.make("cmd-annotation-restart-source-delta"),
+          threadId,
+          messageId: sourceMessageId,
+          delta: sourceText,
+          createdAt,
+        });
+        yield* engine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: CommandId.make("cmd-annotation-restart-source-complete"),
+          threadId,
+          messageId: sourceMessageId,
+          createdAt,
+        });
+
+        yield* Effect.forEach(
+          Array.from({ length: 2_001 }, (_, index) => index),
+          (index) =>
+            engine.dispatch({
+              type: "thread.message.assistant.complete",
+              commandId: CommandId.make(`cmd-annotation-restart-later-${index}`),
+              threadId,
+              messageId: MessageId.make(`assistant-annotation-later-${index}`),
+              createdAt,
+            }),
+          { concurrency: 1, discard: true },
+        );
+      }).pipe(Effect.provide(makeEngineLayer()));
+
+      yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const sql = yield* SqlClient.SqlClient;
+        const result = yield* engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-annotation-restart-turn"),
+          threadId,
+          message: {
+            messageId: MessageId.make("user-annotation-restart"),
+            role: "user",
+            text: "Explain the old answer.",
+            attachments: [],
+            responseAnnotations,
+          },
+          runtimeMode: "full-access",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: "2026-03-04T00:01:00.000Z",
+        });
+
+        assert.equal(result.sequence, 2_007);
+
+        const sourceRows = yield* sql<{
+          readonly text: string;
+          readonly isStreaming: number;
+        }>`
+          SELECT text, is_streaming AS "isStreaming"
+          FROM projection_thread_messages
+          WHERE message_id = ${sourceMessageId}
+        `;
+        assert.deepEqual(sourceRows, [{ text: sourceText, isStreaming: 0 }]);
+
+        const countRows = yield* sql<{
+          readonly messageCount: number;
+          readonly laterMessageCount: number;
+        }>`
+          SELECT
+            COUNT(*) AS "messageCount",
+            SUM(CASE WHEN message_id LIKE 'assistant-annotation-later-%' THEN 1 ELSE 0 END)
+              AS "laterMessageCount"
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(countRows, [{ messageCount: 2_003, laterMessageCount: 2_001 }]);
+
+        const annotationRows = yield* sql<{
+          readonly responseAnnotationsJson: string | null;
+        }>`
+          SELECT response_annotations_json AS "responseAnnotationsJson"
+          FROM projection_thread_messages
+          WHERE message_id = 'user-annotation-restart'
+        `;
+        assert.deepEqual(annotationRows, [
+          { responseAnnotationsJson: JSON.stringify(responseAnnotations) },
+        ]);
+      }).pipe(Effect.provide(makeEngineLayer()));
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "t3-projection-annotation-restart-",
+          }),
+          NodeServices.layer,
+        ),
+      ),
+    ),
 );
 
 const engineLayer = it.layer(

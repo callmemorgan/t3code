@@ -1,8 +1,10 @@
-import { MessageId, ThreadId } from "@t3tools/contracts";
+import { MessageId, ResponseAnnotationId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { PersistenceDecodeError } from "../Errors.ts";
 import { ProjectionThreadMessageRepository } from "../Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadMessageRepositoryLive } from "./ProjectionThreadMessages.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
@@ -174,6 +176,94 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.text, "cleared");
       assert.deepEqual(rows[0]?.attachments, []);
+    }),
+  );
+
+  it.effect("round-trips response annotations and preserves them on streaming updates", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-response-annotations");
+      const messageId = MessageId.make("message-response-annotations");
+      const sourceMessageId = MessageId.make("assistant-response-source");
+      const createdAt = "2026-02-28T19:20:00.000Z";
+      const responseAnnotations = [
+        {
+          id: ResponseAnnotationId.make("annotation-1"),
+          sourceMessageId,
+          selectedText: "selected text",
+          sourceRange: { start: 3, end: 16, prefix: "a ", suffix: " b" },
+          comment: "Explain this.",
+        },
+      ];
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "Please explain.",
+        responseAnnotations,
+        isStreaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "Please explain more.",
+        isStreaming: true,
+        createdAt,
+        updatedAt: "2026-02-28T19:20:01.000Z",
+      });
+
+      const row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag, "Some");
+      if (row._tag === "Some") {
+        assert.deepEqual(row.value.responseAnnotations, responseAnnotations);
+      }
+    }),
+  );
+
+  it.effect("reports malformed response annotation JSON as a decode error", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const messageId = MessageId.make("message-malformed-response-annotations");
+
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id,
+          thread_id,
+          turn_id,
+          role,
+          text,
+          response_annotations_json,
+          is_streaming,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${messageId},
+          ${ThreadId.make("thread-malformed-response-annotations")},
+          NULL,
+          'user',
+          'Please explain.',
+          '{',
+          0,
+          '2026-02-28T19:30:00.000Z',
+          '2026-02-28T19:30:00.000Z'
+        )
+      `;
+
+      const result = yield* Effect.result(repository.getByMessageId({ messageId }));
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.instanceOf(result.failure, PersistenceDecodeError);
+        assert.include(result.failure.operation, "decodeRows");
+      }
     }),
   );
 });

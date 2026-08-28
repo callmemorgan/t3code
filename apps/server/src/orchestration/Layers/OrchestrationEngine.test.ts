@@ -11,6 +11,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   ProjectId,
+  ResponseAnnotationId,
   ThreadId,
   TurnId,
   type OrchestrationEvent,
@@ -375,21 +376,37 @@ describe("OrchestrationEngine", () => {
     };
     const commandReadModel = {
       ...projectionSnapshot,
-      threads: projectionSnapshot.threads.map((thread) => ({
-        ...thread,
-        messages: [],
-        proposedPlans: [],
-        activities: [],
-        checkpoints: [],
-      })),
+      threads: [
+        ...projectionSnapshot.threads.map((thread) => ({
+          ...thread,
+          messages: [],
+          proposedPlans: [],
+          activities: [],
+          checkpoints: [],
+        })),
+        {
+          ...projectionSnapshot.threads[0]!,
+          id: ThreadId.make("thread-bootstrap-ordinary"),
+          messages: [],
+          proposedPlans: [],
+          activities: [],
+          checkpoints: [],
+        },
+      ],
     };
     let fullSnapshotReadCount = 0;
+    let assistantMessageLookupCount = 0;
 
     const layer = OrchestrationEngineLive.pipe(
       Layer.provide(
         Layer.succeed(ProjectionSnapshotQuery, {
           getUserInputActivity: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.succeed(commandReadModel),
+          getAssistantMessageIds: ({ messageIds }) =>
+            Effect.sync(() => {
+              assistantMessageLookupCount += 1;
+              return messageIds;
+            }),
           getSnapshot: () =>
             Effect.sync(() => {
               fullSnapshotReadCount += 1;
@@ -454,6 +471,70 @@ describe("OrchestrationEngine", () => {
     expect(result.sequence).toBe(8);
     expect(await runtime.runPromise(engine.latestSequence)).toBe(8);
     expect(fullSnapshotReadCount).toBe(0);
+
+    await runtime.runPromise(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-bootstrap-ordinary-turn"),
+        threadId: ThreadId.make("thread-bootstrap-ordinary"),
+        message: {
+          messageId: asMessageId("msg-bootstrap-ordinary"),
+          role: "user",
+          text: "Ordinary turn",
+          attachments: [],
+        },
+        createdAt: "2026-03-03T00:00:05.000Z",
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      }),
+    );
+    expect(assistantMessageLookupCount).toBe(0);
+
+    await runtime.runPromise(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-bootstrap-empty-annotations-turn"),
+        threadId: ThreadId.make("thread-bootstrap-ordinary"),
+        message: {
+          messageId: asMessageId("msg-bootstrap-empty-annotations"),
+          role: "user",
+          text: "Empty annotation list",
+          attachments: [],
+          responseAnnotations: [],
+        },
+        createdAt: "2026-03-03T00:00:05.500Z",
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      }),
+    );
+    expect(assistantMessageLookupCount).toBe(0);
+
+    await runtime.runPromise(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-bootstrap-annotated-turn"),
+        threadId: ThreadId.make("thread-bootstrap"),
+        message: {
+          messageId: asMessageId("msg-bootstrap-annotated"),
+          role: "user",
+          text: "Annotated turn",
+          attachments: [],
+          responseAnnotations: [
+            {
+              id: ResponseAnnotationId.make("annotation-bootstrap"),
+              sourceMessageId: asMessageId("assistant-source"),
+              selectedText: "selected",
+              sourceRange: { start: 0, end: 8, prefix: "", suffix: "" },
+              comment: "Explain this.",
+            },
+          ],
+        },
+        createdAt: "2026-03-03T00:00:06.000Z",
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      }),
+    );
+    expect(assistantMessageLookupCount).toBe(1);
 
     await runtime.dispose();
   });

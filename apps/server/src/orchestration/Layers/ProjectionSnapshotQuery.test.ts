@@ -3,6 +3,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ResponseAnnotationId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
@@ -40,6 +41,56 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("looks up only assistant message ids owned by the requested thread", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id,
+          thread_id,
+          turn_id,
+          role,
+          text,
+          is_streaming,
+          created_at,
+          updated_at
+        )
+        VALUES
+          ('assistant-owned', 'thread-1', NULL, 'assistant', 'answer', 0,
+            '2026-02-24T00:00:00.000Z', '2026-02-24T00:00:00.000Z'),
+          ('user-owned', 'thread-1', NULL, 'user', 'question', 0,
+            '2026-02-24T00:00:01.000Z', '2026-02-24T00:00:01.000Z'),
+          ('assistant-foreign', 'thread-2', NULL, 'assistant', 'other answer', 0,
+            '2026-02-24T00:00:02.000Z', '2026-02-24T00:00:02.000Z'),
+          ('assistant-streaming', 'thread-1', NULL, 'assistant', 'partial answer', 1,
+            '2026-02-24T00:00:03.000Z', '2026-02-24T00:00:03.000Z')
+      `;
+
+      const ids = yield* snapshotQuery.getAssistantMessageIds!({
+        threadId: ThreadId.make("thread-1"),
+        messageIds: [
+          asMessageId("assistant-owned"),
+          asMessageId("assistant-owned"),
+          asMessageId("user-owned"),
+          asMessageId("assistant-foreign"),
+          asMessageId("assistant-streaming"),
+          asMessageId("missing"),
+        ],
+      });
+
+      assert.deepEqual(ids, [asMessageId("assistant-owned")]);
+      const emptyIds = yield* snapshotQuery.getAssistantMessageIds!({
+        threadId: ThreadId.make("thread-1"),
+        messageIds: [],
+      });
+      assert.deepEqual(emptyIds, []);
+      yield* sql`DELETE FROM projection_thread_messages`;
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -125,6 +176,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           turn_id,
           role,
           text,
+          response_annotations_json,
           is_streaming,
           created_at,
           updated_at
@@ -135,6 +187,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'turn-1',
           'assistant',
           'hello from projection',
+          '[{"id":"annotation-1","sourceMessageId":"message-1","selectedText":"hello","sourceRange":{"start":0,"end":5,"prefix":"","suffix":" from"},"comment":"Explain this."}]',
           0,
           '2026-02-24T00:00:04.000Z',
           '2026-02-24T00:00:05.000Z'
@@ -344,6 +397,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               id: asMessageId("message-1"),
               role: "assistant",
               text: "hello from projection",
+              responseAnnotations: [
+                {
+                  id: ResponseAnnotationId.make("annotation-1"),
+                  sourceMessageId: asMessageId("message-1"),
+                  selectedText: "hello",
+                  sourceRange: { start: 0, end: 5, prefix: "", suffix: " from" },
+                  comment: "Explain this.",
+                },
+              ],
               turnId: asTurnId("turn-1"),
               streaming: false,
               createdAt: "2026-02-24T00:00:04.000Z",
@@ -2134,11 +2196,26 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         VALUES ('thread-w', ${turn}, ${pendingMessage}, 'completed', ${at}, ${at}, ${at}, '[]')
       `;
       if (pendingMessage !== null) {
+        const responseAnnotationsJson =
+          turn === "turn-4"
+            ? // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify([
+                {
+                  id: "annotation-windowed-1",
+                  sourceMessageId: "turn-1-reply",
+                  selectedText: "reply",
+                  sourceRange: { start: 0, end: 5, prefix: "", suffix: " from" },
+                  comment: "Compare this.",
+                },
+              ])
+            : null;
         yield* sql`
           INSERT INTO projection_thread_messages (
-            message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at
+            message_id, thread_id, turn_id, role, text, response_annotations_json,
+            is_streaming, created_at, updated_at
           )
-          VALUES (${pendingMessage}, 'thread-w', NULL, 'user', ${"prompt for " + turn}, 0, ${at}, ${at})
+          VALUES (${pendingMessage}, 'thread-w', NULL, 'user', ${"prompt for " + turn},
+            ${responseAnnotationsJson}, 0, ${at}, ${at})
         `;
       }
       yield* sql`
@@ -2228,6 +2305,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
           "turn-5-activity",
           "turnless-activity",
         ]);
+        assert.deepEqual(
+          snapshot.value.thread.messages.find((message) => message.id === "user-msg-4")
+            ?.responseAnnotations,
+          [
+            {
+              id: ResponseAnnotationId.make("annotation-windowed-1"),
+              sourceMessageId: asMessageId("turn-1-reply"),
+              selectedText: "reply",
+              sourceRange: { start: 0, end: 5, prefix: "", suffix: " from" },
+              comment: "Compare this.",
+            },
+          ],
+        );
         assert.equal(snapshot.value.page?.hasMore, true);
         assert.notEqual(snapshot.value.page?.beforeCursor, null);
         assert.equal(snapshot.value.page?.snapshotSequence, 42);

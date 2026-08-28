@@ -5,9 +5,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
-import { ChatAttachment } from "@t3tools/contracts";
+import { ChatAttachment, ResponseAnnotation } from "@t3tools/contracts";
 
-import { toPersistenceSqlError } from "../Errors.ts";
+import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 import {
   AppendStreamingProjectionThreadMessage,
   GetProjectionThreadMessageInput,
@@ -22,8 +22,16 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    responseAnnotations: Schema.NullOr(Schema.fromJsonString(Schema.Array(ResponseAnnotation))),
   }),
 );
+
+function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
+  return (cause: unknown) =>
+    Schema.isSchemaError(cause)
+      ? toPersistenceDecodeError(decodeOperation)(cause)
+      : toPersistenceSqlError(sqlOperation)(cause);
+}
 
 function toProjectionThreadMessage(
   row: Schema.Schema.Type<typeof ProjectionThreadMessageDbRowSchema>,
@@ -38,6 +46,7 @@ function toProjectionThreadMessage(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+    ...(row.responseAnnotations !== null ? { responseAnnotations: row.responseAnnotations } : {}),
   };
 }
 
@@ -57,6 +66,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json,
+          response_annotations_json,
           is_streaming,
           created_at,
           updated_at
@@ -75,6 +85,14 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
               WHERE message_id = ${row.messageId}
             )
           ),
+          COALESCE(
+            ${row.responseAnnotations !== undefined ? JSON.stringify(row.responseAnnotations) : null},
+            (
+              SELECT response_annotations_json
+              FROM projection_thread_messages
+              WHERE message_id = ${row.messageId}
+            )
+          ),
           ${row.isStreaming ? 1 : 0},
           ${row.createdAt},
           ${row.updatedAt}
@@ -88,6 +106,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           attachments_json = COALESCE(
             excluded.attachments_json,
             projection_thread_messages.attachments_json
+          ),
+          response_annotations_json = COALESCE(
+            excluded.response_annotations_json,
+            projection_thread_messages.response_annotations_json
           ),
           is_streaming = excluded.is_streaming,
           created_at = excluded.created_at,
@@ -152,6 +174,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          response_annotations_json AS "responseAnnotations",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -173,6 +196,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          response_annotations_json AS "responseAnnotations",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -193,7 +217,12 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
 
   const upsert: ProjectionThreadMessageRepositoryShape["upsert"] = (row) =>
     upsertProjectionThreadMessageRow(row).pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.upsert:query")),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionThreadMessageRepository.upsert:query",
+          "ProjectionThreadMessageRepository.upsert:encodeRequest",
+        ),
+      ),
     );
 
   const appendStreaming: ProjectionThreadMessageRepositoryShape["appendStreaming"] = (row) =>
@@ -206,7 +235,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
   const getByMessageId: ProjectionThreadMessageRepositoryShape["getByMessageId"] = (input) =>
     getProjectionThreadMessageRow(input).pipe(
       Effect.mapError(
-        toPersistenceSqlError("ProjectionThreadMessageRepository.getByMessageId:query"),
+        toPersistenceSqlOrDecodeError(
+          "ProjectionThreadMessageRepository.getByMessageId:query",
+          "ProjectionThreadMessageRepository.getByMessageId:decodeRows",
+        ),
       ),
       Effect.map(Option.map(toProjectionThreadMessage)),
     );
@@ -214,7 +246,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
   const listByThreadId: ProjectionThreadMessageRepositoryShape["listByThreadId"] = (input) =>
     listProjectionThreadMessageRows(input).pipe(
       Effect.mapError(
-        toPersistenceSqlError("ProjectionThreadMessageRepository.listByThreadId:query"),
+        toPersistenceSqlOrDecodeError(
+          "ProjectionThreadMessageRepository.listByThreadId:query",
+          "ProjectionThreadMessageRepository.listByThreadId:decodeRows",
+        ),
       ),
       Effect.map((rows) => rows.map(toProjectionThreadMessage)),
     );

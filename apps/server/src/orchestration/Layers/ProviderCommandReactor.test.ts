@@ -20,6 +20,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  ResponseAnnotationId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -1157,6 +1158,75 @@ describe("ProviderCommandReactor", () => {
       expect(runningThread?.session?.status).toBe("running");
     }),
   );
+  it("formats response annotations into the shared provider prompt", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const sourceMessageId = asMessageId("assistant-annotation-source");
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.make("cmd-assistant-annotation-source"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: sourceMessageId,
+        delta: "The selected passage is useful context.",
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("cmd-assistant-annotation-source-complete"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: sourceMessageId,
+        createdAt: now,
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-annotations"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-annotations"),
+          role: "user",
+          text: "Address this passage",
+          attachments: [],
+          responseAnnotations: [
+            {
+              id: ResponseAnnotationId.make("response-annotation-1"),
+              sourceMessageId,
+              selectedText: "The selected passage",
+              sourceRange: { start: 0, end: 20, prefix: "", suffix: " is useful" },
+              comment: "Explain why this matters",
+            },
+            {
+              id: ResponseAnnotationId.make("response-annotation-2"),
+              sourceMessageId,
+              selectedText: "useful context",
+              sourceRange: { start: 22, end: 36, prefix: "passage is ", suffix: "." },
+              comment: "",
+            },
+          ],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const providerInput = harness.sendTurn.mock.calls[0]?.[0] as { input?: string };
+    expect(providerInput.input).toContain("# Response annotations:");
+    expect(providerInput.input).toContain('"text": "The selected passage"');
+    expect(providerInput.input).toContain('"annotation": "Explain why this matters"');
+    expect(providerInput.input).toContain('"text": "useful context"');
+    expect(providerInput.input).not.toContain("response-annotation-1");
+    expect(providerInput.input).toContain("## My request:\nAddress this passage");
+  });
+
   effectIt.effect("projects starting before a slow provider session finishes", () =>
     Effect.gen(function* () {
       const releaseStart = yield* Deferred.make<void>();

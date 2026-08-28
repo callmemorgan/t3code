@@ -151,6 +151,15 @@ type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
+export interface OrchestrationCommandValidationContext {
+  /**
+   * Completed assistant message ids loaded from persisted projection state for
+   * the command's target thread. The engine supplies this for annotated turn
+   * starts so validation does not depend on the capped command read model.
+   */
+  readonly assistantMessageIds: ReadonlySet<MessageId>;
+}
+
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
   readModel,
@@ -189,10 +198,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   command,
   readModel,
   userInputActivity,
+  validationContext,
 }: {
   readonly command: OrchestrationCommand;
   readonly readModel: OrchestrationReadModel;
   readonly userInputActivity?: OrchestrationThreadActivity;
+  readonly validationContext?: OrchestrationCommandValidationContext;
 }): Effect.fn.Return<
   DecideOrchestrationCommandResult,
   OrchestrationCommandRejection | PlatformError.PlatformError,
@@ -905,11 +916,42 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.start": {
+      const responseAnnotations = command.message.responseAnnotations;
+      if (responseAnnotations !== undefined && responseAnnotations.length > 0) {
+        if (command.bootstrap?.createThread !== undefined) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Response annotations cannot be sent while creating a new thread.",
+          });
+        }
+      }
       const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (responseAnnotations !== undefined && responseAnnotations.length > 0) {
+        // Direct decider callers can still validate against their complete
+        // read model. The engine passes persisted ids explicitly for
+        // annotated starts because its command model intentionally retains no
+        // message bodies (and the ordinary projector window is bounded).
+        const assistantMessageIds =
+          validationContext?.assistantMessageIds ??
+          new Set(
+            targetThread.messages
+              .filter((message) => message.role === "assistant" && !message.streaming)
+              .map((message) => message.id),
+          );
+        const foreignSourceMessage = responseAnnotations.find(
+          (annotation) => !assistantMessageIds.has(annotation.sourceMessageId),
+        );
+        if (foreignSourceMessage !== undefined) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Response annotation '${foreignSourceMessage.id}' references an assistant message outside thread '${targetThread.id}'.`,
+          });
+        }
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({
@@ -948,6 +990,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           role: "user",
           text: command.message.text,
           attachments: command.message.attachments,
+          ...(responseAnnotations !== undefined ? { responseAnnotations } : {}),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
