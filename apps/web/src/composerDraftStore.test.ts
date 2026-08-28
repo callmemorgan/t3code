@@ -13,9 +13,12 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  MessageId,
+  ResponseAnnotationId,
   ThreadId,
   type ModelSelection,
   type ProviderOptionSelection,
+  type ResponseAnnotation,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
@@ -66,6 +69,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
+  composerDraftHasUserContent,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThread,
   markPromotedDraftThreadByRef,
@@ -166,6 +170,26 @@ function providerModelOptions(
   options: Partial<Record<string, Record<string, string | boolean | undefined>>>,
 ): ProviderOptionSelectionsByProvider {
   return selectionsByProvider(options);
+}
+
+function makeResponseAnnotation(input: {
+  id: string;
+  selectedText?: string;
+  comment?: string;
+  sourceMessageId?: string;
+}): ResponseAnnotation {
+  return {
+    id: ResponseAnnotationId.make(input.id),
+    sourceMessageId: MessageId.make(input.sourceMessageId ?? "assistant-message"),
+    selectedText: input.selectedText ?? "selected text",
+    sourceRange: {
+      start: 0,
+      end: (input.selectedText ?? "selected text").length,
+      prefix: "",
+      suffix: "",
+    },
+    comment: input.comment ?? "",
+  };
 }
 
 const TEST_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
@@ -2486,6 +2510,134 @@ describe("composerDraftStore runtime and interaction settings", () => {
     store.setRuntimeMode(threadRef, null);
     store.setInteractionMode(threadRef, null);
 
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore response annotations", () => {
+  const threadId = ThreadId.make("thread-response-annotations");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("keeps annotation array order stable and renumbers after deletion", () => {
+    const store = useComposerDraftStore.getState();
+    const first = makeResponseAnnotation({ id: "response-annotation-1" });
+    const second = makeResponseAnnotation({ id: "response-annotation-2", comment: "Second" });
+    const third = makeResponseAnnotation({ id: "response-annotation-3", comment: "Third" });
+
+    expect(store.addResponseAnnotation(threadRef, first)).toBe(true);
+    expect(store.addResponseAnnotation(threadRef, second)).toBe(true);
+    expect(store.addResponseAnnotation(threadRef, third)).toBe(true);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.responseAnnotations).toEqual([
+      first,
+      second,
+      third,
+    ]);
+
+    store.removeResponseAnnotation(threadRef, second.id);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.responseAnnotations).toEqual([first, third]);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.responseAnnotations[1]?.comment).toBe("Third");
+  });
+
+  it("updates comments without replacing the selected source", () => {
+    const store = useComposerDraftStore.getState();
+    const annotation = makeResponseAnnotation({ id: "response-annotation-edit", comment: "old" });
+    store.addResponseAnnotation(threadRef, annotation);
+
+    expect(store.updateResponseAnnotationComment(threadRef, annotation.id, "new comment")).toBe(
+      true,
+    );
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.responseAnnotations[0]).toEqual({
+      ...annotation,
+      comment: "new comment",
+    });
+    expect(store.updateResponseAnnotationComment(threadRef, annotation.id, "x".repeat(4_001))).toBe(
+      false,
+    );
+  });
+
+  it("counts annotations as user content and clears them with composer content", () => {
+    const store = useComposerDraftStore.getState();
+    store.addResponseAnnotation(
+      threadRef,
+      makeResponseAnnotation({ id: "response-annotation-content" }),
+    );
+    expect(composerDraftHasUserContent(draftFor(threadId, TEST_ENVIRONMENT_ID))).toBe(true);
+
+    store.clearComposerContent(threadRef);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
+
+  it("does not move source-bound annotations when moving prompt text", () => {
+    const destination = DraftId.make("draft-response-destination");
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "follow up");
+    store.addResponseAnnotation(
+      threadRef,
+      makeResponseAnnotation({ id: "response-annotation-source-bound" }),
+    );
+
+    store.moveComposerPromptAndImages(threadRef, destination);
+
+    expect(draftByKey(destination)?.prompt).toBe("follow up");
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.responseAnnotations).toHaveLength(1);
+    expect(draftByKey(destination)?.responseAnnotations).toEqual([]);
+  });
+
+  it("restores a failed send only if no newer content was entered", () => {
+    const store = useComposerDraftStore.getState();
+    const annotation = makeResponseAnnotation({ id: "response-annotation-retry" });
+    store.setPrompt(threadRef, "explain this");
+    store.addResponseAnnotation(threadRef, annotation);
+    const snapshot = store.captureComposerDraftContent(threadRef);
+    store.clearComposerContent(threadRef);
+
+    expect(store.restoreComposerDraftContentIfUnchanged(threadRef, snapshot)).toBe(true);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("explain this");
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.responseAnnotations).toEqual([annotation]);
+
+    store.clearComposerContent(threadRef);
+    store.setPrompt(threadRef, "newer edit");
+    expect(store.restoreComposerDraftContentIfUnchanged(threadRef, snapshot)).toBe(false);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("newer edit");
+  });
+
+  it("clears a captured send only if the editable draft is unchanged", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "send this");
+    const snapshot = store.captureComposerDraftContent(threadRef);
+
+    expect(store.clearComposerContentIfUnchanged(threadRef, snapshot)).toBe(true);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+
+    store.setPrompt(threadRef, "send this");
+    const secondSnapshot = store.captureComposerDraftContent(threadRef);
+    store.setPrompt(threadRef, "newer edit");
+
+    expect(store.clearComposerContentIfUnchanged(threadRef, secondSnapshot)).toBe(false);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("newer edit");
+  });
+
+  it("ignores asynchronous image persistence bookkeeping when consuming a send", () => {
+    const store = useComposerDraftStore.getState();
+    const image = makeImage({ id: "response-send-image", previewUrl: "blob:response-send-image" });
+    store.addImage(threadRef, image);
+    const snapshot = store.captureComposerDraftContent(threadRef);
+
+    store.syncPersistedAttachments(threadRef, [
+      {
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        dataUrl: "data:image/png;base64,AQ==",
+      },
+    ]);
+
+    expect(store.clearComposerContentIfUnchanged(threadRef, snapshot)).toBe(true);
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
   });
 });

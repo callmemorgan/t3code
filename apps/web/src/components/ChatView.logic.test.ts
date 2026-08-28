@@ -6,6 +6,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  ResponseAnnotationId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -40,6 +41,7 @@ import {
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
   resolveDraftPromotionNavigationTarget,
+  resolveResponseAnnotationSendState,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   resolveDraftHeroState,
@@ -1070,6 +1072,17 @@ describe("deriveComposerSendState", () => {
     expect(state.hasSendableContent).toBe(true);
   });
 
+  it("treats response annotations as sendable content", () => {
+    expect(
+      deriveComposerSendState({
+        prompt: "",
+        imageCount: 0,
+        terminalContexts: [],
+        responseAnnotationCount: 1,
+      }).hasSendableContent,
+    ).toBe(true);
+  });
+
   it("does NOT treat zero element contexts as sendable", () => {
     expect(
       deriveComposerSendState({
@@ -1079,6 +1092,60 @@ describe("deriveComposerSendState", () => {
         elementContextCount: 0,
       }).hasSendableContent,
     ).toBe(false);
+  });
+});
+
+describe("resolveResponseAnnotationSendState", () => {
+  const annotation = {
+    id: ResponseAnnotationId.make("annotation-1"),
+    sourceMessageId: MessageId.make("assistant-1"),
+    selectedText: "selected",
+    sourceRange: { start: 0, end: 8, prefix: "", suffix: "" },
+    comment: "",
+  };
+
+  it("allows creation and sending only when an existing thread advertises support", () => {
+    expect(
+      resolveResponseAnnotationSendState({
+        capability: true,
+        isServerThread: true,
+        annotations: [annotation],
+      }),
+    ).toEqual({
+      canCreate: true,
+      annotationsForSend: [annotation],
+      blockReason: null,
+    });
+  });
+
+  it("does not send metadata to a server with missing or disabled support", () => {
+    for (const capability of [undefined, false]) {
+      expect(
+        resolveResponseAnnotationSendState({
+          capability,
+          isServerThread: true,
+          annotations: [annotation],
+        }),
+      ).toEqual({
+        canCreate: false,
+        annotationsForSend: [],
+        blockReason: "unsupported",
+      });
+    }
+  });
+
+  it("keeps annotations out of a new-thread bootstrap", () => {
+    expect(
+      resolveResponseAnnotationSendState({
+        capability: true,
+        isServerThread: false,
+        annotations: [annotation],
+      }),
+    ).toEqual({
+      canCreate: false,
+      annotationsForSend: [],
+      blockReason: "requires-existing-thread",
+    });
   });
 });
 

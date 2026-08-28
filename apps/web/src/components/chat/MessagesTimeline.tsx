@@ -2,6 +2,7 @@ import {
   type AssistantCitation,
   type EnvironmentId,
   type MessageId,
+  type ResponseAnnotation,
   type ScopedThreadRef,
   type ServerProviderSkill,
   type ToolActivityIcon,
@@ -108,6 +109,7 @@ import {
 } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
+import { ResponseAnnotationSummary } from "./ResponseAnnotationSummary";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { CHAT_TIMELINE_ANCHOR_OFFSET } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
@@ -175,6 +177,14 @@ import {
   parseReviewCommentMessageSegments,
   type ReviewCommentContext,
 } from "../../reviewCommentContext";
+import {
+  ResponseAnnotationSourceRoot,
+  ResponseAnnotationTimelineController,
+  useResponseAnnotationTimelineContext,
+  type ResponseAnnotationNavigationRequest,
+  type ResponseAnnotationSourceMarker,
+} from "./ResponseAnnotationController";
+import { deriveResponseAnnotationTurnContext } from "./responseAnnotationTimeline";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -206,6 +216,7 @@ interface TimelineRowSharedState {
   workGroupViewState: WorkGroupViewState;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+  responseAnnotationsByTurnId: ReadonlyMap<TurnId, ReadonlyArray<ResponseAnnotation>>;
 }
 
 interface TimelineRowActivityState {
@@ -268,6 +279,7 @@ function TimelineListFooter({ composerInset }: { readonly composerInset: number 
   );
 }
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_RESPONSE_ANNOTATIONS: ReadonlyArray<ResponseAnnotation> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -334,6 +346,17 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: CitationHistoryPage | null;
+  /** Whether this server advertises response annotation creation. */
+  responseAnnotationsSupported?: boolean;
+  /** Current unsent response annotations, in their display/provider order. */
+  responseAnnotations?: ReadonlyArray<ResponseAnnotation>;
+  onCreateResponseAnnotation?: (annotation: ResponseAnnotation) => void;
+  onUpdateResponseAnnotation?: (annotationId: ResponseAnnotation["id"], comment: string) => void;
+  onDeleteResponseAnnotation?: (annotationId: ResponseAnnotation["id"]) => void;
+  /** Root-controlled request to reveal a sent or draft annotation source. */
+  responseAnnotationNavigationRequest?: ResponseAnnotationNavigationRequest | null;
+  /** Called when a source row must be mounted before a navigation request resolves. */
+  onRequestResponseAnnotationSource?: (messageId: MessageId) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +402,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
+  responseAnnotationsSupported = false,
+  responseAnnotations = EMPTY_RESPONSE_ANNOTATIONS,
+  onCreateResponseAnnotation,
+  onUpdateResponseAnnotation,
+  onDeleteResponseAnnotation,
+  responseAnnotationNavigationRequest = null,
+  onRequestResponseAnnotationSource,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const citationThreadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
@@ -502,6 +532,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
   }, [latestTurn]);
 
+  // A citation can point into a settled turn whose middle entries are folded
+  // by default. Expand that turn before the controller resolves its DOM
+  // selector; the controller retries again when `rows` changes below.
+  useEffect(() => {
+    const request = responseAnnotationNavigationRequest;
+    if (!request) return;
+    const sourceEntry = timelineEntries.find(
+      (entry) =>
+        entry.kind === "message" &&
+        entry.message.role === "assistant" &&
+        entry.message.id === request.annotation.sourceMessageId,
+    );
+    const sourceTurnId = sourceEntry?.kind === "message" ? sourceEntry.message.turnId : null;
+    if (sourceTurnId === null || sourceTurnId === undefined) return;
+    setExpandedTurnIds((existing) => {
+      if (existing.has(sourceTurnId)) return existing;
+      const next = new Set(existing);
+      next.add(sourceTurnId);
+      return next;
+    });
+  }, [responseAnnotationNavigationRequest, timelineEntries]);
+
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
@@ -528,6 +580,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const responseAnnotationTurnContext = useMemo(
+    () => deriveResponseAnnotationTurnContext(timelineEntries),
+    [timelineEntries],
+  );
+  const sentResponseAnnotationMarkers = useMemo<ReadonlyArray<ResponseAnnotationSourceMarker>>(
+    () =>
+      timelineEntries.flatMap((entry) => {
+        if (entry.kind !== "message" || entry.message.role !== "user") return [];
+        return (entry.message.responseAnnotations ?? []).map((annotation, index) => ({
+          annotation,
+          number: index + 1,
+          editable: false,
+        }));
+      }),
+    [timelineEntries],
+  );
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
@@ -660,6 +728,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workGroupViewState,
       agentPanelModel,
       onOpenAgents,
+      responseAnnotationsByTurnId: responseAnnotationTurnContext.annotationsByTurnId,
     }),
     [
       readyCitationRequest,
@@ -684,6 +753,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workGroupViewState,
       agentPanelModel,
       onOpenAgents,
+      responseAnnotationTurnContext.annotationsByTurnId,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -695,6 +765,43 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       latestTurnId: latestTurn?.turnId ?? null,
     }),
     [isCompacting, isRevertingCheckpoint, isWorking, isPreparingWorktree, latestTurn?.turnId],
+  );
+
+  const handleRequestResponseAnnotationSource = useCallback(
+    (messageId: MessageId) => {
+      const sourceEntry = timelineEntries.find(
+        (entry) =>
+          entry.kind === "message" &&
+          entry.message.role === "assistant" &&
+          entry.message.id === messageId,
+      );
+      // The source is already in this page, so pagination cannot help. Ask
+      // LegendList to mount the virtualized row instead. The retry signal on
+      // the controller will resolve the range after the row is rendered.
+      if (sourceEntry) {
+        const sourceRowIndex = rows.findIndex(
+          (row) => row.kind === "message" && row.message.id === messageId,
+        );
+        if (sourceRowIndex >= 0) {
+          void listRef.current?.scrollToIndex({
+            index: sourceRowIndex,
+            animated: false,
+            viewOffset: 24,
+          });
+        }
+      }
+      const sourceTurnId = sourceEntry?.kind === "message" ? sourceEntry.message.turnId : null;
+      if (sourceTurnId !== null && sourceTurnId !== undefined) {
+        setExpandedTurnIds((existing) => {
+          if (existing.has(sourceTurnId)) return existing;
+          const next = new Set(existing);
+          next.add(sourceTurnId);
+          return next;
+        });
+      }
+      if (!sourceEntry) onRequestResponseAnnotationSource?.(messageId);
+    },
+    [listRef, onRequestResponseAnnotationSource, rows, timelineEntries],
   );
 
   // Stable renderItem — no closure deps. Row components read shared state
@@ -734,67 +841,79 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               onCite={onCiteAssistantText}
             />
           ) : null}
-          <LegendList<MessagesTimelineRow>
-            ref={listRef}
-            data={rows}
-            extraData={rows.length}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd={citationRequest === null}
-            // Legend needs a data refresh to mount new pins without a scroll event.
-            {...(readyCitationRequest ? { dataVersion: readyCitationRequest.key } : {})}
-            {...(citationAlwaysRender ? { alwaysRender: citationAlwaysRender } : {})}
-            onLoad={onCitationListLoad}
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
-            maintainScrollAtEnd={
-              citationPositioning ||
-              anchoredEndSpace ||
-              !liveFollowEnabled ||
-              disclosureToggleSettling
-                ? false
-                : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
-            maintainVisibleContentPosition={
-              citationPositioning ? false : maintainVisibleContentPosition
-            }
-            maintainScrollAtEndThreshold={1}
-            onScroll={handleScroll}
-            className={cn(
-              "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-              topFadeEnabled && "topbar-scroll-fade",
-            )}
-            ListHeaderComponent={
-              loadEarlier !== null ? (
-                <TimelineLoadEarlierHeader
-                  loading={loadEarlier.loading}
-                  onLoadEarlier={loadEarlier.onLoadEarlier}
-                  fade={topFadeEnabled}
-                />
-              ) : topFadeEnabled ? (
-                TIMELINE_LIST_FADE_HEADER
-              ) : (
-                TIMELINE_LIST_HEADER
-              )
-            }
-            ListFooterComponent={timelineListFooter}
-          />
-          <TimelineMinimap
-            items={minimapItems}
-            hasPersistentGutter={minimapHasPersistentGutter}
-            hitStripWidth={minimapHitStripWidth}
-            stripMap={minimapStripMap}
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
-          />
+          <ResponseAnnotationTimelineController
+            supported={responseAnnotationsSupported}
+            draftAnnotations={responseAnnotations}
+            sentAnnotations={sentResponseAnnotationMarkers}
+            onCreateResponseAnnotation={onCreateResponseAnnotation}
+            onUpdateResponseAnnotation={onUpdateResponseAnnotation}
+            onDeleteResponseAnnotation={onDeleteResponseAnnotation}
+            navigationRequest={responseAnnotationNavigationRequest}
+            navigationRetrySignal={rows}
+            onRequestResponseAnnotationSource={handleRequestResponseAnnotationSource}
+          >
+            <LegendList<MessagesTimelineRow>
+              ref={listRef}
+              data={rows}
+              extraData={rows.length}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd={citationRequest === null}
+              // Legend needs a data refresh to mount new pins without a scroll event.
+              {...(readyCitationRequest ? { dataVersion: readyCitationRequest.key } : {})}
+              {...(citationAlwaysRender ? { alwaysRender: citationAlwaysRender } : {})}
+              onLoad={onCitationListLoad}
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
+              maintainScrollAtEnd={
+                citationPositioning ||
+                anchoredEndSpace ||
+                !liveFollowEnabled ||
+                disclosureToggleSettling
+                  ? false
+                  : TIMELINE_MAINTAIN_SCROLL_AT_END
+              }
+              maintainVisibleContentPosition={
+                citationPositioning ? false : maintainVisibleContentPosition
+              }
+              maintainScrollAtEndThreshold={1}
+              onScroll={handleScroll}
+              className={cn(
+                "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
+                topFadeEnabled && "topbar-scroll-fade",
+              )}
+              ListHeaderComponent={
+                loadEarlier !== null ? (
+                  <TimelineLoadEarlierHeader
+                    loading={loadEarlier.loading}
+                    onLoadEarlier={loadEarlier.onLoadEarlier}
+                    fade={topFadeEnabled}
+                  />
+                ) : topFadeEnabled ? (
+                  TIMELINE_LIST_FADE_HEADER
+                ) : (
+                  TIMELINE_LIST_HEADER
+                )
+              }
+              ListFooterComponent={timelineListFooter}
+            />
+            <TimelineMinimap
+              items={minimapItems}
+              hasPersistentGutter={minimapHasPersistentGutter}
+              hitStripWidth={minimapHitStripWidth}
+              stripMap={minimapStripMap}
+              onSelect={(item) => {
+                onManualNavigation();
+                void listRef.current?.scrollToIndex({
+                  index: item.rowIndex,
+                  animated: true,
+                  viewOffset: 24,
+                });
+              }}
+            />
+          </ResponseAnnotationTimelineController>
         </div>
       </TimelineRowActivityCtx>
     </TimelineRowCtx>
@@ -1215,6 +1334,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const ctx = use(TimelineRowCtx);
   // The attachment union has an open member, so guards (not literal type
   // comparisons) split it. Unknown types render as inert rows below the files.
+  const annotationContext = useResponseAnnotationTimelineContext();
   const userImages = (row.message.attachments ?? []).filter(isImageAttachment);
   const userFiles = (row.message.attachments ?? []).filter(isFileAttachment);
   const userVideos = userFiles.filter(isVideoAttachment);
@@ -1389,6 +1509,20 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           skills={ctx.skills}
           markdownCwd={ctx.markdownCwd}
         />
+        {(row.message.responseAnnotations?.length ?? 0) > 0 ? (
+          <div className="mt-2 flex justify-end">
+            <ResponseAnnotationSummary
+              annotations={row.message.responseAnnotations ?? []}
+              onJump={(annotation) => {
+                const index =
+                  (row.message.responseAnnotations ?? []).findIndex(
+                    (candidate) => candidate.id === annotation.id,
+                  ) + 1;
+                annotationContext.onResponseAnnotationClick(annotation, Math.max(1, index));
+              }}
+            />
+          </div>
+        ) : null}
       </div>
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
@@ -1459,7 +1593,15 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
+  const annotationContext = useResponseAnnotationTimelineContext();
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const responseAnnotations = row.message.turnId
+    ? ctx.responseAnnotationsByTurnId.get(row.message.turnId)
+    : undefined;
+  const responseAnnotationsForMarkdown =
+    (responseAnnotations?.length ?? 0) > 0 || messageText.includes(':codex-annotation{index="')
+      ? (responseAnnotations ?? EMPTY_RESPONSE_ANNOTATIONS)
+      : undefined;
 
   return (
     <>
@@ -1471,16 +1613,26 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           request={ctx.citationRequest}
           listRef={ctx.listRef}
         >
-          <ChatMarkdown
-            text={messageText}
-            cwd={ctx.markdownCwd}
-            threadRef={ctx.threadRef ?? undefined}
-            isStreaming={Boolean(row.message.streaming)}
-            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-            skills={ctx.skills}
-            onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-            onImageExpand={ctx.onImageExpand}
-          />
+          <ResponseAnnotationSourceRoot
+            messageId={row.message.id}
+            streaming={Boolean(row.message.streaming)}
+            selectable={Boolean(row.message.text)}
+          >
+            <ChatMarkdown
+              text={messageText}
+              cwd={ctx.markdownCwd}
+              threadRef={ctx.threadRef ?? undefined}
+              isStreaming={Boolean(row.message.streaming)}
+              lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+              skills={ctx.skills}
+              onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+              onImageExpand={ctx.onImageExpand}
+              {...(responseAnnotationsForMarkdown === undefined
+                ? {}
+                : { responseAnnotations: responseAnnotationsForMarkdown })}
+              onResponseAnnotationClick={annotationContext.onResponseAnnotationClick}
+            />
+          </ResponseAnnotationSourceRoot>
         </AssistantCitationSource>
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}

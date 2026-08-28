@@ -7,6 +7,7 @@ import type {
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
+  ResponseAnnotation,
   ResolvedKeybindingsConfig,
   RuntimeMode,
   ScopedThreadRef,
@@ -148,6 +149,7 @@ import { type ElementContextDraft } from "../../lib/elementContext";
 import { ComposerPendingElementContexts } from "./ComposerPendingElementContexts";
 import { ComposerPendingReviewComments } from "./ComposerPendingReviewComments";
 import { ComposerPreviewAnnotationCards } from "./ComposerPreviewAnnotationCards";
+import { ResponseAnnotationSummary } from "./ResponseAnnotationSummary";
 import {
   COMPOSER_FOOTER_COMPACT_BREAKPOINT_PX,
   COMPOSER_FOOTER_WIDE_ACTIONS_COMPACT_BREAKPOINT_PX,
@@ -1139,6 +1141,7 @@ export interface ChatComposerHandle {
     terminalContexts: TerminalContextDraft[];
     elementContexts: ElementContextDraft[];
     previewAnnotations: PreviewAnnotationPayload[];
+    responseAnnotations: ResponseAnnotation[];
     reviewComments: ReviewCommentContext[];
     selectedPromptEffort: string | null;
     selectedModelOptionsForDispatch: unknown;
@@ -1293,6 +1296,8 @@ export interface ChatComposerProps {
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;
+  /** Jump to the source passage for a draft response annotation. */
+  onJumpToResponseAnnotation: (annotation: ResponseAnnotation) => void;
 }
 
 // --------------------------------------------------------------------------
@@ -1383,11 +1388,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setThreadError,
     onExpandImage,
     onFileOpen,
+    onJumpToResponseAnnotation,
   } = props;
   const activeTasksProgress = props.threadSyncPhase === null ? props.activeTasksProgress : null;
   const activeTaskSteps = props.threadSyncPhase === null ? props.activeTaskSteps : null;
   // ------------------------------------------------------------------
-  // Store subscriptions (prompt / images / terminal contexts)
+  // Store subscriptions (prompt / images / composer contexts)
   // ------------------------------------------------------------------
   const composerDraft = useComposerThreadDraft(composerDraftTarget);
   // Live target key, for async flows that must notice a thread switch that
@@ -1406,6 +1412,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerTerminalContexts = composerDraft.terminalContexts;
   const composerElementContexts = composerDraft.elementContexts;
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
+  const composerResponseAnnotations = composerDraft.responseAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
   const standaloneComposerImages = useMemo(() => {
     const previewAnnotationIds = new Set(
@@ -1462,6 +1469,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const removeComposerDraftPreviewAnnotation = useComposerDraftStore(
     (store) => store.removePreviewAnnotation,
   );
+  const removeComposerDraftResponseAnnotation = useComposerDraftStore(
+    (store) => store.removeResponseAnnotation,
+  );
   const removeComposerDraftReviewComment = useComposerDraftStore(
     (store) => store.removeReviewComment,
   );
@@ -1475,6 +1485,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (store) => store.syncPersistedAttachments,
   );
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
+
+  const jumpToResponseAnnotation = useCallback(
+    (annotation: ResponseAnnotation) => {
+      onJumpToResponseAnnotation(annotation);
+    },
+    [onJumpToResponseAnnotation],
+  );
 
   useEffect(() => {
     if (!attachmentUploadsCapabilityKnown) {
@@ -1859,12 +1876,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           composerElementContexts.length +
           composerPreviewAnnotations.length +
           composerReviewComments.length,
+        responseAnnotationCount: composerResponseAnnotations.length,
       }),
     [
       composerElementContexts.length,
       composerFiles.length,
       composerImages.length,
       composerPreviewAnnotations.length,
+      composerResponseAnnotations.length,
       composerReviewComments.length,
       composerTerminalContexts,
       prompt,
@@ -3425,7 +3444,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
       }
 
-      // Terminal and preview context stays behind because the stash cannot restore it.
+      // Only the prompt and attachments are cleared — terminal/element contexts,
+      // preview/response annotations, and review comments are not stashable, so
+      // destroying them here would be unrecoverable.
       promptRef.current = "";
       clearComposerDraftPromptAndImages(stashTarget);
       for (const image of images) {
@@ -4578,6 +4599,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         terminalContexts: composerTerminalContextsRef.current,
         elementContexts: composerElementContextsRef.current,
         previewAnnotations: composerPreviewAnnotations,
+        responseAnnotations: composerResponseAnnotations,
         reviewComments: composerReviewComments,
         selectedPromptEffort,
         selectedModelOptionsForDispatch,
@@ -4615,6 +4637,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerTerminalContextsRef,
       composerElementContextsRef,
       composerPreviewAnnotations,
+      composerResponseAnnotations,
       composerReviewComments,
       focusComposer,
       isConnecting,
@@ -5027,6 +5050,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }}
                     className="mb-3"
                   />
+                )}
+
+              {!isComposerCollapsedMobile &&
+                !isComposerApprovalState &&
+                pendingUserInputs.length === 0 &&
+                composerResponseAnnotations.length > 0 && (
+                  <div className="mb-3 flex flex-wrap gap-1.5">
+                    <ResponseAnnotationSummary
+                      annotations={composerResponseAnnotations}
+                      editable
+                      placement="composer"
+                      onJump={jumpToResponseAnnotation}
+                      onRemove={(annotationId) =>
+                        removeComposerDraftResponseAnnotation(composerDraftTarget, annotationId)
+                      }
+                    />
+                  </div>
                 )}
 
               {!isComposerCollapsedMobile &&

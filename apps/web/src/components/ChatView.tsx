@@ -10,6 +10,7 @@ import {
   type ProjectId,
   type ProviderApprovalDecision,
   type PreviewAnnotationPayload,
+  type ResponseAnnotation,
   ProviderInstanceId,
   type ServerProvider,
   type ResolvedKeybindingsConfig,
@@ -242,6 +243,7 @@ import {
   composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
+  type ComposerDraftContentSnapshot,
   type DraftThreadEnvMode,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
@@ -297,6 +299,7 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
+import type { ResponseAnnotationNavigationRequest } from "./chat/ResponseAnnotationController";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { resolveComposerTimelineInset } from "./composerFooterLayout";
 import { ChatHeader } from "./chat/ChatHeader";
@@ -382,6 +385,7 @@ import {
   resolveBackgroundDraftWorkspaceOptions,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
+  resolveResponseAnnotationSendState,
   resolveDraftHeroState,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
@@ -448,6 +452,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_RESPONSE_ANNOTATIONS: ReadonlyArray<ResponseAnnotation> = [];
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -1495,25 +1500,29 @@ function ChatViewContent(props: ChatViewProps) {
     const draft = store.getComposerDraft(composerDraftTarget);
     return (draft?.images.length ?? 0) > 0 || (draft?.files.length ?? 0) > 0;
   });
-  const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
-  const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
-  const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);
-  const setComposerDraftTerminalContexts = useComposerDraftStore(
-    (store) => store.setTerminalContexts,
+  const composerResponseAnnotations = useComposerDraftStore(
+    (store) =>
+      store.getComposerDraft(composerDraftTarget)?.responseAnnotations ??
+      EMPTY_RESPONSE_ANNOTATIONS,
   );
-  const setComposerDraftElementContexts = useComposerDraftStore(
-    (store) => store.setElementContexts,
+  const addComposerDraftResponseAnnotation = useComposerDraftStore(
+    (store) => store.addResponseAnnotation,
   );
-  const setComposerDraftPreviewAnnotations = useComposerDraftStore(
-    (store) => store.setPreviewAnnotations,
+  const updateComposerDraftResponseAnnotation = useComposerDraftStore(
+    (store) => store.updateResponseAnnotationComment,
   );
-  const setComposerDraftReviewComments = useComposerDraftStore((store) => store.setReviewComments);
+  const removeComposerDraftResponseAnnotation = useComposerDraftStore(
+    (store) => store.removeResponseAnnotation,
+  );
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const clearComposerDraftContentIfUnchanged = useComposerDraftStore(
+    (store) => store.clearComposerContentIfUnchanged,
+  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
@@ -1557,6 +1566,19 @@ function ChatViewContent(props: ChatViewProps) {
     return () => revokeBlobPreviewUrl(src);
   }, [expandedImage]);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
+  const responseAnnotationNavigationSequenceRef = useRef(0);
+  const responseAnnotationPaginationRequestRef = useRef<{
+    readonly threadKey: string;
+    readonly sourceMessageId: MessageId;
+    readonly loadedMessages: ReadonlyArray<ChatMessage>;
+  } | null>(null);
+  const [responseAnnotationNavigationRequest, setResponseAnnotationNavigationRequest] =
+    useState<ResponseAnnotationNavigationRequest | null>(null);
+  useEffect(() => {
+    responseAnnotationNavigationSequenceRef.current = 0;
+    responseAnnotationPaginationRequestRef.current = null;
+    setResponseAnnotationNavigationRequest(null);
+  }, [routeThreadKey]);
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
@@ -2249,6 +2271,9 @@ function ChatViewContent(props: ChatViewProps) {
     : (primaryEnvironment?.serverConfig ?? null);
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const responseAnnotationsCapability = serverConfig?.environment.capabilities.responseAnnotations;
+  const supportsResponseAnnotationCreation =
+    responseAnnotationsCapability === true && isServerThread;
   const attachmentEnvironmentConfig = environmentById.get(environmentId)?.serverConfig ?? null;
   const attachmentUploadsCapabilityKnown = attachmentEnvironmentConfig !== null;
   const supportsAttachmentUploads =
@@ -6101,6 +6126,7 @@ function ChatViewContent(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       elementContexts: composerElementContexts,
       previewAnnotations: sendContextPreviewAnnotations,
+      responseAnnotations: sendContextResponseAnnotations,
       reviewComments: composerReviewComments,
       selectedProvider: ctxSelectedProvider,
       selectedModel: ctxSelectedModel,
@@ -6119,6 +6145,28 @@ function ChatViewContent(props: ChatViewProps) {
       directAnnotation?.image !== undefined &&
       !annotationImageAlreadyAttached &&
       sendContextImages.length + composerFiles.length < PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
+    const responseAnnotationSendState = resolveResponseAnnotationSendState({
+      capability: responseAnnotationsCapability,
+      isServerThread,
+      annotations: sendContextResponseAnnotations,
+    });
+    if (responseAnnotationSendState.blockReason !== null) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title:
+            responseAnnotationSendState.blockReason === "unsupported"
+              ? "Response annotations are not supported by this server"
+              : "Start the thread before adding response annotations",
+          description:
+            responseAnnotationSendState.blockReason === "unsupported"
+              ? "Update the server or remove the annotations before sending."
+              : "Response annotations can only refer to responses in the current thread.",
+        }),
+      );
+      return;
+    }
+    const responseAnnotationsForSend = responseAnnotationSendState.annotationsForSend;
     const composerImages =
       directAnnotation?.image && annotationImageAppended
         ? [...sendContextImages, directAnnotation.image]
@@ -6156,6 +6204,7 @@ function ChatViewContent(props: ChatViewProps) {
         composerElementContexts.length +
         composerPreviewAnnotations.length +
         composerReviewComments.length,
+      responseAnnotationCount: responseAnnotationsForSend.length,
     });
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
@@ -6164,6 +6213,7 @@ function ChatViewContent(props: ChatViewProps) {
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
       composerPreviewAnnotations.length === 0 &&
+      responseAnnotationsForSend.length === 0 &&
       composerReviewComments.length === 0
         ? parseCodexFeedbackCommand(trimmed)
         : null;
@@ -6256,6 +6306,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (
       !directAnnotation &&
       sendInteractionModeEnabled &&
+      responseAnnotationsForSend.length === 0 &&
       showPlanFollowUpPrompt &&
       activeProposedPlan &&
       composerImages.length === 0 &&
@@ -6292,6 +6343,7 @@ function ChatViewContent(props: ChatViewProps) {
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
       composerPreviewAnnotations.length === 0 &&
+      responseAnnotationsForSend.length === 0 &&
       composerReviewComments.length === 0
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
@@ -6350,7 +6402,18 @@ function ChatViewContent(props: ChatViewProps) {
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerElementContextsSnapshot = [...composerElementContexts];
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
+    const composerResponseAnnotationsSnapshot = [...responseAnnotationsForSend];
     const composerReviewCommentsSnapshot: ReviewCommentContext[] = [...composerReviewComments];
+    const composerDraftContentSnapshot = {
+      ...useComposerDraftStore.getState().captureComposerDraftContent(composerDraftTarget),
+      prompt: promptForSend,
+      images: composerImagesSnapshot,
+      terminalContexts: composerTerminalContextsSnapshot,
+      elementContexts: composerElementContextsSnapshot,
+      previewAnnotations: composerPreviewAnnotationsSnapshot,
+      responseAnnotations: composerResponseAnnotationsSnapshot,
+      reviewComments: composerReviewCommentsSnapshot,
+    };
     const messageTextWithContexts = appendElementContextsToPrompt(
       appendTerminalContextsToPrompt(promptForSend, composerTerminalContextsSnapshot),
       composerElementContextsSnapshot,
@@ -6363,12 +6426,15 @@ function ChatViewContent(props: ChatViewProps) {
       messageTextWithPreviewAnnotations,
       composerReviewCommentsSnapshot,
     );
+    const providerMessageText =
+      messageTextForSend ||
+      (composerAttachmentsSnapshot.length > 0 ? ATTACHMENT_ONLY_BOOTSTRAP_PROMPT : "");
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
       models: ctxSelectedProviderModels,
       effort: ctxSelectedPromptEffort,
-      text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+      text: providerMessageText,
     });
     if (composerRef.current?.validateProviderInput(outgoingMessageText) === false) {
       return;
@@ -6390,6 +6456,11 @@ function ChatViewContent(props: ChatViewProps) {
       };
     };
 
+    const composerDraftContentBeforeSend = useComposerDraftStore
+      .getState()
+      .captureComposerDraftContent(composerDraftTarget);
+    let didClearComposerDraft = false;
+    let clearedComposerDraftContentSnapshot: ComposerDraftContentSnapshot | null = null;
     sendInFlightRef.current = true;
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
     if (attachmentCapabilitiesBeforeUpload.fileBlockReason !== null) {
@@ -6530,6 +6601,9 @@ function ChatViewContent(props: ChatViewProps) {
         role: "user",
         text: outgoingMessageText,
         ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+        ...(composerResponseAnnotationsSnapshot.length > 0
+          ? { responseAnnotations: composerResponseAnnotationsSnapshot }
+          : {}),
         turnId: null,
         createdAt: messageCreatedAt,
         updatedAt: messageCreatedAt,
@@ -6550,9 +6624,17 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       );
     }
-    promptRef.current = "";
-    clearComposerDraftContent(composerDraftTarget);
-    composerRef.current?.resetCursorState();
+    didClearComposerDraft = clearComposerDraftContentIfUnchanged(
+      composerDraftTarget,
+      composerDraftContentBeforeSend,
+    );
+    if (didClearComposerDraft) {
+      promptRef.current = "";
+      clearedComposerDraftContentSnapshot = useComposerDraftStore
+        .getState()
+        .captureComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+    }
 
     let firstComposerImageName: string | null = null;
     if (composerImagesSnapshot.length > 0) {
@@ -6673,6 +6755,9 @@ function ChatViewContent(props: ChatViewProps) {
             role: "user",
             text: outgoingMessageText,
             attachments: turnAttachmentsResult.value,
+            ...(composerResponseAnnotationsSnapshot.length > 0
+              ? { responseAnnotations: composerResponseAnnotationsSnapshot }
+              : {}),
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
@@ -6689,7 +6774,7 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
-        if (turnUsesAttachmentUploads) {
+        if (turnUsesAttachmentUploads && didClearComposerDraft) {
           releaseDraftAttachments(composerAttachmentsSnapshot);
         }
         acknowledgeActiveThreadWoke();
@@ -6744,38 +6829,41 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     if (failure !== null) {
-      if (
-        promptRef.current.length === 0 &&
-        composerImagesRef.current.length === 0 &&
-        composerFilesRef.current.length === 0 &&
-        composerTerminalContextsRef.current.length === 0 &&
-        composerElementContextsRef.current.length === 0 &&
-        (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.previewAnnotations
-          .length ?? 0) === 0 &&
-        (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.reviewComments
-          .length ?? 0) === 0
-      ) {
-        setOptimisticUserMessages((existing) => {
-          const removed = existing.filter((message) => message.id === messageIdForSend);
-          for (const message of removed) {
-            revokeUserMessagePreviewUrls(message);
+      const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
+      const composerPreviewUrls = new Set(
+        useComposerDraftStore
+          .getState()
+          .getComposerDraft(composerDraftTarget)
+          ?.images.map((image) => image.previewUrl) ?? [],
+      );
+      setOptimisticUserMessages((existing) => {
+        const removed = existing.filter((message) => message.id === messageIdForSend);
+        for (const message of removed) {
+          for (const previewUrl of collectUserMessageBlobPreviewUrls(message)) {
+            if (!composerPreviewUrls.has(previewUrl)) {
+              revokeBlobPreviewUrl(previewUrl);
+            }
           }
-          const next = existing.filter((message) => message.id !== messageIdForSend);
-          return next.length === existing.length ? existing : next;
-        });
+        }
+        const next = existing.filter((message) => message.id !== messageIdForSend);
+        return next.length === existing.length ? existing : next;
+      });
+      const restoredDraft =
+        didClearComposerDraft && clearedComposerDraftContentSnapshot !== null
+          ? useComposerDraftStore
+              .getState()
+              .restoreComposerDraftContentIfUnchanged(
+                composerDraftTarget,
+                { ...composerDraftContentSnapshot, images: retryComposerImages },
+                clearedComposerDraftContentSnapshot,
+              )
+          : false;
+      if (restoredDraft) {
         promptRef.current = promptForSend;
-        const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
         composerImagesRef.current = retryComposerImages;
         composerFilesRef.current = composerFilesSnapshot;
         composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
         composerElementContextsRef.current = composerElementContextsSnapshot;
-        setComposerDraftPrompt(composerDraftTarget, promptForSend);
-        addComposerDraftImages(composerDraftTarget, retryComposerImages);
-        addComposerDraftFiles(composerDraftTarget, composerFilesSnapshot);
-        setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
-        setComposerDraftElementContexts(composerDraftTarget, composerElementContextsSnapshot);
-        setComposerDraftPreviewAnnotations(composerDraftTarget, composerPreviewAnnotationsSnapshot);
-        setComposerDraftReviewComments(composerDraftTarget, composerReviewCommentsSnapshot);
         composerRef.current?.resetCursorState({
           cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
           prompt: promptForSend,
@@ -7475,6 +7563,67 @@ function ChatViewContent(props: ChatViewProps) {
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
 
+  const onCreateResponseAnnotation = useCallback(
+    (annotation: ResponseAnnotation) => {
+      if (!supportsResponseAnnotationCreation) return false;
+      return addComposerDraftResponseAnnotation(composerDraftTarget, annotation);
+    },
+    [addComposerDraftResponseAnnotation, composerDraftTarget, supportsResponseAnnotationCreation],
+  );
+  const onUpdateResponseAnnotation = useCallback(
+    (annotationId: ResponseAnnotation["id"], comment: string) =>
+      updateComposerDraftResponseAnnotation(composerDraftTarget, annotationId, comment),
+    [composerDraftTarget, updateComposerDraftResponseAnnotation],
+  );
+  const onDeleteResponseAnnotation = useCallback(
+    (annotationId: ResponseAnnotation["id"]) =>
+      removeComposerDraftResponseAnnotation(composerDraftTarget, annotationId),
+    [composerDraftTarget, removeComposerDraftResponseAnnotation],
+  );
+  const onJumpToResponseAnnotation = useCallback(
+    (annotation: ResponseAnnotation) => {
+      const annotations =
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)
+          ?.responseAnnotations ?? EMPTY_RESPONSE_ANNOTATIONS;
+      const annotationIndex = annotations.findIndex((entry) => entry.id === annotation.id);
+      responseAnnotationNavigationSequenceRef.current += 1;
+      setResponseAnnotationNavigationRequest({
+        annotation,
+        requestId: responseAnnotationNavigationSequenceRef.current,
+        ...(annotationIndex >= 0 ? { number: annotationIndex + 1 } : {}),
+      });
+    },
+    [composerDraftTarget],
+  );
+  const onRequestResponseAnnotationSource = useCallback(
+    (sourceMessageId: MessageId) => {
+      if (
+        routeKind !== "server" ||
+        !activeThread ||
+        activeThread.messages.some((message) => message.id === sourceMessageId) ||
+        !threadHasOlderTurns(routeThreadState) ||
+        (routeThreadState.page._tag === "Some" && routeThreadState.page.value.loadingOlder)
+      ) {
+        return;
+      }
+      const previousRequest = responseAnnotationPaginationRequestRef.current;
+      if (
+        previousRequest?.threadKey === routeThreadKey &&
+        previousRequest.sourceMessageId === sourceMessageId &&
+        previousRequest.loadedMessages === activeThread.messages
+      ) {
+        return;
+      }
+      responseAnnotationPaginationRequestRef.current = {
+        threadKey: routeThreadKey,
+        sourceMessageId,
+        loadedMessages: activeThread.messages,
+      };
+      requestOlderThreadTurns(routeThreadRef.environmentId, routeThreadRef.threadId);
+    },
+    [activeThread, routeKind, routeThreadKey, routeThreadRef, routeThreadState],
+  );
+
   // Empty state: no active thread
   if (!activeThread) {
     return <NoActiveThreadState />;
@@ -7805,6 +7954,13 @@ function ChatViewContent(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
+                responseAnnotationsSupported={supportsResponseAnnotationCreation}
+                responseAnnotations={composerResponseAnnotations}
+                onCreateResponseAnnotation={onCreateResponseAnnotation}
+                onUpdateResponseAnnotation={onUpdateResponseAnnotation}
+                onDeleteResponseAnnotation={onDeleteResponseAnnotation}
+                responseAnnotationNavigationRequest={responseAnnotationNavigationRequest}
+                onRequestResponseAnnotationSource={onRequestResponseAnnotationSource}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
@@ -7980,6 +8136,7 @@ function ChatViewContent(props: ChatViewProps) {
                             setThreadError={setThreadError}
                             onExpandImage={onExpandTimelineImage}
                             onFileOpen={openFileAttachment}
+                            onJumpToResponseAnnotation={onJumpToResponseAnnotation}
                           />
                         </div>
                       </ComposerSurface.Host>

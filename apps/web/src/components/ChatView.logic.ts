@@ -11,6 +11,7 @@ import {
   type ProviderInteractionMode,
   ProviderDriverKind,
   type ProviderInstanceId,
+  type ResponseAnnotation,
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
@@ -663,6 +664,8 @@ export function deriveComposerSendState(options: {
    * contexts do: a prompt of just element chips is still a valid send.
    */
   elementContextCount?: number;
+  /** Response annotations attached to this turn after capability checks. */
+  responseAnnotationCount?: number;
 }): {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
@@ -674,6 +677,7 @@ export function deriveComposerSendState(options: {
   const expiredTerminalContextCount =
     options.terminalContexts.length - sendableTerminalContexts.length;
   const elementContextCount = options.elementContextCount ?? 0;
+  const responseAnnotationCount = options.responseAnnotationCount ?? 0;
   return {
     trimmedPrompt,
     sendableTerminalContexts,
@@ -682,7 +686,32 @@ export function deriveComposerSendState(options: {
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
       sendableTerminalContexts.length > 0 ||
-      elementContextCount > 0,
+      elementContextCount > 0 ||
+      responseAnnotationCount > 0,
+  };
+}
+
+export type ResponseAnnotationSendBlockReason = "unsupported" | "requires-existing-thread";
+
+export function resolveResponseAnnotationSendState(input: {
+  capability: boolean | undefined;
+  isServerThread: boolean;
+  annotations: ReadonlyArray<ResponseAnnotation>;
+}): {
+  canCreate: boolean;
+  annotationsForSend: ReadonlyArray<ResponseAnnotation>;
+  blockReason: ResponseAnnotationSendBlockReason | null;
+} {
+  const canUseAnnotations = input.capability === true && input.isServerThread;
+  return {
+    canCreate: canUseAnnotations,
+    annotationsForSend: canUseAnnotations ? input.annotations : [],
+    blockReason:
+      input.annotations.length === 0 || canUseAnnotations
+        ? null
+        : input.isServerThread
+          ? "unsupported"
+          : "requires-existing-thread",
   };
 }
 

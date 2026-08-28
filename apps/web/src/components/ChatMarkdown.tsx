@@ -168,6 +168,13 @@ import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { isAbsolutePath, resolvePathLinkTarget } from "../terminal-links";
 import {
+  codexResponseAnnotationHref,
+  parseCodexResponseAnnotationHref,
+  remarkCodexResponseAnnotations,
+  resolveCodexResponseAnnotation,
+  type ResponseAnnotation,
+} from "../lib/responseAnnotations";
+import {
   isBrowserPreviewFile,
   openFileInPreview,
   openUrlInPreview,
@@ -196,6 +203,10 @@ interface ChatMarkdownProps {
   imageBaseDir?: string | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   extraRemarkPlugins?: NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
+  /** Resolve native Codex annotation directives against the initiating user message. */
+  responseAnnotations?: ReadonlyArray<ResponseAnnotation>;
+  /** Called when a resolved response annotation is activated. */
+  onResponseAnnotationClick?: (annotation: ResponseAnnotation, index: number) => void;
 }
 
 export function canUseMarkdownFileShellActions(
@@ -378,6 +389,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   attributes: {
     ...defaultSchema.attributes,
     "*": (defaultSchema.attributes?.["*"] ?? []).filter((attribute) => attribute !== "title"),
+    a: [...(defaultSchema.attributes?.a ?? []), "dataCodexResponseAnnotation"],
     code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
@@ -1529,6 +1541,72 @@ function handleMarkdownFragmentClick(event: ReactMouseEvent<HTMLAnchorElement>, 
   target.scrollIntoView({ block: "nearest" });
 }
 
+const ResponseAnnotationLink = memo(function ResponseAnnotationLink(props: {
+  readonly annotation: ResponseAnnotation;
+  readonly index: number;
+  readonly rawIndex: string;
+  readonly onActivate: ((annotation: ResponseAnnotation, index: number) => void) | undefined;
+}) {
+  const { annotation, index, rawIndex, onActivate } = props;
+  const handleClick = useCallback(
+    (event: ReactMouseEvent<HTMLAnchorElement>) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      onActivate?.(annotation, index);
+    },
+    [annotation, index, onActivate],
+  );
+  const comment = annotation.comment.trim();
+  const accessibleDescription = comment
+    ? `Annotation ${rawIndex}: ${annotation.selectedText}. ${comment}`
+    : `Annotation ${rawIndex}: ${annotation.selectedText}`;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <a
+            href={codexResponseAnnotationHref(rawIndex)}
+            className="text-blue-600 no-underline decoration-blue-600/40 underline-offset-2 hover:text-blue-500 hover:underline focus-visible:underline dark:text-blue-400 dark:decoration-blue-400/40 dark:hover:text-blue-300"
+            aria-label={accessibleDescription}
+            onClick={handleClick}
+          />
+        }
+      >
+        Annotation {rawIndex}
+      </TooltipTrigger>
+      <TooltipPopup
+        side="top"
+        className="max-w-[min(32rem,calc(100vw-2rem))] whitespace-normal leading-tight"
+      >
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground">Selected text:</div>
+          <div className="whitespace-pre-wrap wrap-anywhere">{annotation.selectedText}</div>
+          {comment ? (
+            <div className="border-t border-border/60 pt-1">
+              <div className="text-xs text-muted-foreground">User comment:</div>
+              <div className="mt-0.5 whitespace-pre-wrap wrap-anywhere">{comment}</div>
+            </div>
+          ) : null}
+        </div>
+      </TooltipPopup>
+    </Tooltip>
+  );
+});
+
+function UnresolvedResponseAnnotation(props: { readonly rawIndex: string }) {
+  return (
+    <span
+      className="text-blue-600 dark:text-blue-400"
+      aria-label={`Annotation ${props.rawIndex} (source unavailable)`}
+    >
+      Annotation {props.rawIndex}
+    </span>
+  );
+}
+
 function MarkdownExternalLinkContent({
   host,
   plainText,
@@ -1967,6 +2045,8 @@ function ChatMarkdown({
   imageBaseDir,
   onImageExpand,
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
+  responseAnnotations,
+  onResponseAnnotationClick,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const [localMediaPreview, setLocalMediaPreview] = useState<ExpandedImagePreview | null>(null);
@@ -2109,6 +2189,14 @@ function ChatMarkdown({
     if (isWindowsDrivePathHref(href)) return href;
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
+  const markdownRemarkPlugins = useMemo(
+    () => [
+      ...(lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS),
+      ...extraRemarkPlugins,
+      ...(responseAnnotations === undefined ? [] : [remarkCodexResponseAnnotations]),
+    ],
+    [extraRemarkPlugins, lineBreaks, responseAnnotations],
+  );
   // Re-emit highlighted content as markdown so copying out of the rendered
   // view keeps links, emphasis, lists, and code fences intact.
   const handleCopy = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -2425,6 +2513,27 @@ function ChatMarkdown({
       a({ node, href, children, title: _title, ...props }) {
         const citation = href ? parseAssistantCitationHref(href) : null;
         if (citation) return <AssistantCitationChip citation={citation} />;
+        const annotationDirective =
+          node?.properties.dataCodexResponseAnnotation !== undefined
+            ? parseCodexResponseAnnotationHref(href)
+            : null;
+        if (annotationDirective) {
+          const annotation = resolveCodexResponseAnnotation(
+            annotationDirective,
+            responseAnnotations ?? [],
+          );
+          if (!annotation || annotationDirective.index === null || annotationDirective.index < 1) {
+            return <UnresolvedResponseAnnotation rawIndex={annotationDirective.rawIndex} />;
+          }
+          return (
+            <ResponseAnnotationLink
+              annotation={annotation}
+              index={annotationDirective.index}
+              rawIndex={annotationDirective.rawIndex}
+              onActivate={onResponseAnnotationClick}
+            />
+          );
+        }
         const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
         const fileLinkMeta = normalizedHref
           ? (markdownFileLinkMetaByHref.get(normalizedHref) ??
@@ -2743,6 +2852,8 @@ function ChatMarkdown({
     imageBaseDir,
     isStreaming,
     linkTargetPreference,
+    onResponseAnnotationClick,
+    responseAnnotations,
     markdownFileLinkMetaByHref,
     onTaskListChange,
     onUseArtifactTemplate,
@@ -2766,14 +2877,6 @@ function ChatMarkdown({
   ]);
   /* eslint-enable react/no-unstable-nested-components */
 
-  const remarkPlugins = useMemo(
-    () => [
-      ...(lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS),
-      ...extraRemarkPlugins,
-    ],
-    [extraRemarkPlugins, lineBreaks],
-  );
-
   // react-markdown converts unparsed HTML nodes to text when skipHtml is false.
   // Keep that behavior explicit because literal mode depends on escaping the
   // complete source token instead of dropping it from the rendered message.
@@ -2786,7 +2889,7 @@ function ChatMarkdown({
       onCopy={handleCopy}
     >
       <ReactMarkdown
-        remarkPlugins={remarkPlugins}
+        remarkPlugins={markdownRemarkPlugins}
         rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined}
         skipHtml={false}
         components={markdownComponents}

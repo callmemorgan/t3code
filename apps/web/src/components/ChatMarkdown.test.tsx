@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, MessageId, ResponseAnnotationId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -34,6 +34,14 @@ import ChatMarkdown, {
   orderedListGutterStyle,
   shouldUseMarkdownFileBrowserPrimaryAction,
 } from "./ChatMarkdown";
+
+const responseAnnotation = {
+  id: ResponseAnnotationId.make("response-annotation-1"),
+  sourceMessageId: MessageId.make("assistant-message-1"),
+  selectedText: "selected text",
+  sourceRange: { start: 0, end: 13, prefix: "", suffix: "" },
+  comment: "Please address this.",
+};
 
 describe("canUseMarkdownFileShellActions", () => {
   const environmentId = EnvironmentId.make("environment-1");
@@ -393,6 +401,92 @@ describe("orderedListGutterStyle", () => {
   it("treats a missing/zero item count as a single item", () => {
     expect(orderedListGutterStyle(0, undefined)).toBeUndefined();
     expect(orderedListGutterStyle(0, 100)).toEqual({ "--list-gutter": "4ch" });
+  });
+});
+
+describe("ChatMarkdown response annotations", () => {
+  it("renders a resolved native Codex directive as an accessible link", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'Before :codex-annotation{index="1"} after'}
+        responseAnnotations={[responseAnnotation]}
+      />,
+    );
+
+    expect(html).toContain("Before ");
+    expect(html).toContain("Annotation 1");
+    expect(html).toContain("Please address this.");
+    expect(html).toContain("t3-codex-response-annotation-1");
+  });
+
+  it("renders a well-formed out-of-range directive as a noninteractive label", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'Before :codex-annotation{index="2"} after'}
+        responseAnnotations={[responseAnnotation]}
+      />,
+    );
+
+    expect(html).toContain("Annotation 2");
+    expect(html).not.toContain("t3-codex-response-annotation-2");
+    expect(html).not.toContain('<a href="#t3-codex-response-annotation-2"');
+  });
+
+  it("leaves malformed directives literal", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'Bad :codex-annotation{index=1} and :codex-annotation{index="x"}'}
+        responseAnnotations={[responseAnnotation]}
+      />,
+    );
+
+    expect(html).toContain(":codex-annotation{index=1}");
+    expect(html).toContain(":codex-annotation{index=&quot;x&quot;}");
+    expect(html).not.toContain("Annotation 1");
+  });
+
+  it("leaves an escaped directive literal", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={String.raw`\:codex-annotation{index="1"} and :codex-annotation{index="1"}`}
+        responseAnnotations={[responseAnnotation]}
+      />,
+    );
+
+    expect(html).toContain(":codex-annotation{index=&quot;1&quot;}");
+    expect(html).toContain("and <a");
+    expect(html).toContain('href="#t3-codex-response-annotation-1"');
+  });
+
+  it("does not treat an ordinary fragment link as a native directive", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={"[ordinary fragment](#t3-codex-response-annotation-1)"}
+        responseAnnotations={[responseAnnotation]}
+      />,
+    );
+
+    expect(html).toContain("ordinary fragment");
+    expect(html).not.toContain("Please address this.");
+    expect(html).not.toContain("Annotation 1: selected text");
+  });
+
+  it("does not transform directives in inline or fenced code", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'` :codex-annotation{index="1"} `\n\n```text\n:codex-annotation{index="1"}\n```'}
+        responseAnnotations={[responseAnnotation]}
+      />,
+    );
+
+    expect(html).toContain(":codex-annotation{index=&quot;1&quot;}");
+    expect(html).not.toContain("t3-codex-response-annotation-1");
   });
 });
 
