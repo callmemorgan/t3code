@@ -205,6 +205,26 @@ leaving the screen, or an audio interruption discards the new recording and keep
 and attachments. T3 Code deletes the local audio file after transcription or cancellation. It sends
 only the normal message text when you submit the draft.
 
+## Response annotations
+
+On web and desktop, select text in a completed assistant response and choose **Annotate**. T3 Code
+adds a numbered marker to the selection and opens an editor beside it. The comment is optional.
+Choose **Save** after changing the comment, **Cancel** to leave it unchanged, or **Delete** to remove
+the annotation. Draft markers stay visible while you edit.
+
+When a draft has annotations, the composer shows one **N annotations** chip. Open it to jump to a
+selection or delete one. T3 Code renumbers the remaining draft annotations after a deletion. Sending
+preserves their order. You can send annotations with a normal prompt or send a message that contains
+annotations without typed text. Sent annotations appear in the user message summary and cannot be
+edited.
+
+When the agent refers to a selection, T3 Code displays a blue **Annotation N** link in its response.
+Hover or focus the link to see the selected text and comment. Activate it to open the source message,
+scroll to the selection, and highlight it.
+
+Mobile v1 can show annotation summaries on sent user messages and open response annotation links. It
+is read-only: mobile cannot create or edit annotations in drafts yet. Use web or desktop to add them.
+
 ## Commands and skills
 
 Type `/` to open the command menu. Type `$` to find and add a skill. Skill rows show their source,

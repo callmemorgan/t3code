@@ -8,6 +8,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 
 - [Project and workspace](#project-and-workspace)
 - [Thread timeline](#thread-timeline)
+- [Response annotations](#response-annotations)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
@@ -42,6 +43,21 @@ A single user-to-assistant work cycle inside a thread. It starts with user input
 #### Activity
 
 A user-visible log item attached to a thread. In [the contracts][1], activities cover important non-message events like approvals, tool actions, and failures. They are projected into thread state in [projector.ts][4].
+
+### Response annotations
+
+#### Response annotation
+
+A user-authored selection from a completed assistant response, optionally with a comment. T3 Code
+stores it in the `responseAnnotations` metadata on the user message that sends it. Its position in
+that array is the one-based number used by the provider. The source message ID and text selector let
+clients restore the selection; the provider receives only the selected text and comment.
+
+#### Response annotation directive
+
+The Codex-native inline reference `:codex-annotation{index="N"}` in provider prose. Clients resolve
+`N` against the annotations on the initiating user message for the same turn. The server leaves
+provider prose untouched, so malformed directives remain text.
 
 ### Orchestration
 

@@ -315,6 +315,46 @@ Do not run an old image-only server against state that contains file attachments
 each persisted event before projection. A file-bearing event can make `ProjectionPipeline` bootstrap
 and `OrchestrationEngine` startup fail for the entire environment, not only the affected thread.
 
+## Response annotations
+
+Response annotations are optional structured metadata on a user message. The field is named
+`responseAnnotations` and appears on the turn-start command, the message-sent event payload, and
+`OrchestrationMessage`; older messages may omit it. Each item stores a stable annotation ID, the
+source message ID, selected text, a source range, and a comment string that may be empty. The source
+range uses UTF-16 offsets into the rendered selectable text plus a prefix and suffix for matching
+when a response is rendered again. The array order is the annotation's provider-facing number; no
+separate ordinal is persisted.
+
+When a turn includes annotations, `ProviderCommandReactor` adds a common provider prompt envelope
+before calling the provider service. It sends the selected text and non-empty comments as JSON under
+`<response-annotations>`, then puts the user's request under `## My request:`. Stable IDs, source
+ranges, and message IDs stay in T3 Code metadata. Codex, Claude, Cursor, Grok, and OpenCode use the
+same formatting; their adapters do not need annotation-specific parsing.
+
+The provider's response remains free-form prose with one native reference form:
+`:codex-annotation{index="N"}`. `N` is a one-based position in the annotations array. Clients parse
+this directive while rendering and resolve it against the annotations on the initiating user message
+for the same turn. The server does not parse or rewrite provider responses and does not add assistant
+message metadata. A malformed directive remains literal text; a valid but out-of-range index is
+rendered as a noninteractive label.
+
+Annotations belong to their thread. A turn that creates a new thread must reject annotation
+metadata, and moving prompt text to another project does not move its annotations. The server
+advertises support with the optional `responseAnnotations: true` capability. Clients treat a missing
+capability as unsupported, hide annotation creation, and omit the field from requests. This prevents
+new clients from sending annotation metadata to older servers.
+
+The contract allows up to 20 annotations per message, 8,000 characters of selected text per
+annotation, 4,000 characters of comment, and 128 characters each for the source-range prefix and
+suffix. The final provider input limit remains 120,000 characters, including the annotation envelope;
+the server does not truncate an oversized request and returns the existing validation error.
+
+Response annotations do not require special provider compaction handling. The metadata remains on
+the user message, and provider compaction continues unchanged. An older client connected to a newer
+server may show a native directive as raw text, while a newer client connected to an older server
+will not offer annotation creation. Release server, web, and mobile support together to keep this
+version-skew period short.
+
 ## How provider work is requested
 
 Clients never call a provider directly. They dispatch orchestration commands over the RPC method
