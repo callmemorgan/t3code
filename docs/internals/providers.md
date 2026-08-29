@@ -338,6 +338,16 @@ for the same turn. The server does not parse or rewrite provider responses and d
 message metadata. A malformed directive remains literal text; a valid but out-of-range index is
 rendered as a noninteractive label.
 
+The initiating user message is persisted before the provider has assigned a turn ID. After
+`ProviderService.sendTurn` returns, `ProviderCommandReactor` dispatches the server-only
+`thread.response-annotations.bind-turn` command. Its decider re-emits the existing
+`thread.message-sent` event shape with the provider's exact `turnId`, so older clients can ignore the
+update safely. The projector, SQLite projection, and client reducer update the existing user message,
+and turn projection reconciliation prefers this bound message over the thread-local pending-start
+fallback. Clients do not resolve directives for an unbound message; they may still show its sent
+annotation summary. This prevents overlapping or reversed provider starts from borrowing another
+message's annotations without adding a new event type or database column.
+
 Annotations belong to their thread. A turn that creates a new thread must reject annotation
 metadata, and moving prompt text to another project does not move its annotations. The server
 advertises support with the optional `responseAnnotations: true` capability. Clients treat a missing
@@ -346,8 +356,9 @@ new clients from sending annotation metadata to older servers.
 
 The contract allows up to 20 annotations per message, 8,000 characters of selected text per
 annotation, 4,000 characters of comment, and 128 characters each for the source-range prefix and
-suffix. The final provider input limit remains 120,000 characters, including the annotation envelope;
-the server does not truncate an oversized request and returns the existing validation error.
+suffix. Web formats the same provider input as the server before dispatch, and the decider repeats
+the 120,000-character aggregate check before persisting the user message. `ProviderService` checks
+the final input again after adding attachment paths. The server never truncates an oversized request.
 
 Response annotations do not require special provider compaction handling. The metadata remains on
 the user message, and provider compaction continues unchanged. An older client connected to a newer
