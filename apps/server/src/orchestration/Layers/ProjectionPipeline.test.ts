@@ -3348,6 +3348,241 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
   },
 );
 
+it.layer(makeProjectionPipelinePrefixedTestLayer("t3-bound-turn-association-test-"))(
+  "OrchestrationProjectionPipeline turn/message association",
+  (it) => {
+    it.effect("keeps M1 and M2 attached when binding and session results are reordered", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-bound-association");
+        const messageOneId = MessageId.make("message-bound-one");
+        const messageTwoId = MessageId.make("message-bound-two");
+        const turnOneId = TurnId.make("turn-bound-one");
+        const turnTwoId = TurnId.make("turn-bound-two");
+        const firstAt = "2026-08-28T01:00:00.000Z";
+        const secondAt = "2026-08-28T01:00:01.000Z";
+        const thirdAt = "2026-08-28T01:00:02.000Z";
+        const annotation = {
+          id: ResponseAnnotationId.make("annotation-bound-association"),
+          sourceMessageId: MessageId.make("assistant-bound-source"),
+          selectedText: "selected",
+          sourceRange: { start: 0, end: 8, prefix: "", suffix: "" },
+          comment: "",
+        };
+
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-bound-m1"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: firstAt,
+          commandId: CommandId.make("cmd-bound-m1"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: messageOneId,
+            role: "user",
+            text: "M1",
+            responseAnnotations: [annotation],
+            turnId: null,
+            streaming: false,
+            createdAt: firstAt,
+            updatedAt: firstAt,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.turn-start-requested",
+          eventId: EventId.make("evt-bound-start-m1"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: firstAt,
+          commandId: CommandId.make("cmd-bound-start-m1"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: messageOneId,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: firstAt,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-bound-m2"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: secondAt,
+          commandId: CommandId.make("cmd-bound-m2"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: messageTwoId,
+            role: "user",
+            text: "M2",
+            responseAnnotations: [
+              { ...annotation, id: ResponseAnnotationId.make("annotation-bound-association-2") },
+            ],
+            turnId: null,
+            streaming: false,
+            createdAt: secondAt,
+            updatedAt: secondAt,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.turn-start-requested",
+          eventId: EventId.make("evt-bound-start-m2"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: secondAt,
+          commandId: CommandId.make("cmd-bound-start-m2"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: messageTwoId,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: secondAt,
+          },
+        });
+
+        // M1 binds before its session-set, while M2's successful result is
+        // deliberately reversed: session-set arrives before its bind.
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-bound-bind-m1"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: thirdAt,
+          commandId: CommandId.make("cmd-bound-bind-m1"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: messageOneId,
+            role: "user",
+            text: "M1",
+            responseAnnotations: [annotation],
+            turnId: turnOneId,
+            streaming: false,
+            createdAt: firstAt,
+            updatedAt: firstAt,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.make("evt-bound-session-m2"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: thirdAt,
+          commandId: CommandId.make("cmd-bound-session-m2"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: turnTwoId,
+              lastError: null,
+              updatedAt: thirdAt,
+            },
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.make("evt-bound-session-m1"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: thirdAt,
+          commandId: CommandId.make("cmd-bound-session-m1"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: turnOneId,
+              lastError: null,
+              updatedAt: thirdAt,
+            },
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-bound-bind-m2"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: thirdAt,
+          commandId: CommandId.make("cmd-bound-bind-m2"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: messageTwoId,
+            role: "user",
+            text: "M2",
+            responseAnnotations: [
+              { ...annotation, id: ResponseAnnotationId.make("annotation-bound-association-2") },
+            ],
+            turnId: turnTwoId,
+            streaming: false,
+            createdAt: secondAt,
+            updatedAt: secondAt,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+        const rows = yield* sql<{
+          readonly turnId: string;
+          readonly pendingMessageId: string | null;
+        }>`
+          SELECT turn_id AS "turnId", pending_message_id AS "pendingMessageId"
+          FROM projection_turns
+          WHERE thread_id = ${threadId}
+          ORDER BY turn_id ASC
+        `;
+        assert.deepEqual(rows, [
+          { turnId: turnOneId, pendingMessageId: messageOneId },
+          { turnId: turnTwoId, pendingMessageId: messageTwoId },
+        ]);
+
+        const messageRows = yield* sql<{
+          readonly messageId: string;
+          readonly turnId: string | null;
+        }>`
+          SELECT message_id AS "messageId", turn_id AS "turnId"
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId}
+          ORDER BY message_id ASC
+        `;
+        assert.deepEqual(messageRows, [
+          { messageId: messageOneId, turnId: turnOneId },
+          { messageId: messageTwoId, turnId: turnTwoId },
+        ]);
+      }),
+    );
+  },
+);
+
 it.effect("restores pending turn-start metadata across projection pipeline restart", () =>
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;
@@ -3620,7 +3855,10 @@ it.effect(
           WHERE message_id = 'user-annotation-restart'
         `;
         assert.deepEqual(annotationRows, [
-          { responseAnnotationsJson: JSON.stringify(responseAnnotations) },
+          {
+            responseAnnotationsJson:
+              '[{"id":"annotation-after-restart","sourceMessageId":"assistant-annotation-source","selectedText":"old source answer","sourceRange":{"start":0,"end":17,"prefix":"","suffix":""},"comment":"Explain this old answer."}]',
+          },
         ]);
       }).pipe(Effect.provide(makeEngineLayer()));
     }).pipe(

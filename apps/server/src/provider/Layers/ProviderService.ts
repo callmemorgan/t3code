@@ -910,7 +910,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     ) {
       return yield* toValidationError(
         "ProviderService.sendTurn",
-        `Provider input must be at most ${PROVIDER_SEND_TURN_MAX_INPUT_CHARS} characters after attachment paths are appended`,
+        `Final provider input must be at most ${PROVIDER_SEND_TURN_MAX_INPUT_CHARS} characters after attachment paths are appended`,
       );
     }
 

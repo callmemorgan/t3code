@@ -487,6 +487,60 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    it("updates an existing annotated user message with its bound turn id", () => {
+      const turnId = TurnId.make("turn-annotations-bound");
+      const responseAnnotations = [
+        {
+          id: ResponseAnnotationId.make("annotation-bound"),
+          sourceMessageId: MessageId.make("assistant-source-bound"),
+          selectedText: "selected",
+          sourceRange: { start: 0, end: 8, prefix: "", suffix: "" },
+          comment: "Explain this.",
+        },
+      ];
+      const existingThread: OrchestrationThread = {
+        ...baseThread,
+        messages: [
+          {
+            id: MessageId.make("msg-annotations-bound"),
+            role: "user",
+            text: "Please explain.",
+            responseAnnotations,
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T08:00:00.000Z",
+            updatedAt: "2026-04-01T08:00:00.000Z",
+          },
+        ],
+      };
+
+      const result = applyThreadDetailEvent(existingThread, {
+        ...baseEventFields,
+        sequence: 10,
+        occurredAt: "2026-04-01T08:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-annotations-bound"),
+          role: "user",
+          text: "Please explain.",
+          responseAnnotations,
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T08:00:00.000Z",
+          updatedAt: "2026-04-01T08:01:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages[0]?.turnId).toBe(turnId);
+        expect(result.thread.messages[0]?.responseAnnotations).toBe(responseAnnotations);
+      }
+    });
+
     it("keeps latestTurn running for interim assistant messages while the session runs the turn", () => {
       const threadWithRunningSession: OrchestrationThread = {
         ...baseThread,

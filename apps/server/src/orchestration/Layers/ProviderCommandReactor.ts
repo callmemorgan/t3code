@@ -3,6 +3,7 @@ import {
   CommandId,
   EventId,
   type ModelSelection,
+  type MessageId,
   type OrchestrationEvent,
   ProviderDriverKind,
   type ProjectId,
@@ -57,7 +58,7 @@ import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import {
   formatResponseAnnotationPrompt,
   type ResponseAnnotationPromptItem,
-} from "../../responseAnnotations.ts";
+} from "@t3tools/shared/responseAnnotations";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -413,6 +414,25 @@ const make = Effect.gen(function* () {
           commandId,
           threadId: input.threadId,
           session: input.session,
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
+
+  const bindResponseAnnotationsToTurn = (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly turnId: TurnId;
+    readonly createdAt: string;
+  }) =>
+    serverCommandId("response-annotations-bind-turn").pipe(
+      Effect.flatMap((commandId) =>
+        orchestrationEngine.dispatch({
+          type: "thread.response-annotations.bind-turn",
+          commandId,
+          threadId: input.threadId,
+          messageId: input.messageId,
+          turnId: input.turnId,
           createdAt: input.createdAt,
         }),
       ),
@@ -1440,9 +1460,30 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+    yield* providerService.sendTurn(sendTurnRequest.value).pipe(
+      Effect.tap((result) => {
+        if (message.responseAnnotations === undefined || message.responseAnnotations.length === 0) {
+          return Effect.void;
+        }
+        return bindResponseAnnotationsToTurn({
+          threadId: event.payload.threadId,
+          messageId: event.payload.messageId,
+          turnId: result.turnId,
+          createdAt: event.payload.createdAt,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider command reactor failed to bind response annotations", {
+              threadId: event.payload.threadId,
+              messageId: event.payload.messageId,
+              turnId: result.turnId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+      }),
+      Effect.catchCause(recoverTurnStartFailure),
+      Effect.forkScoped,
+    );
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (

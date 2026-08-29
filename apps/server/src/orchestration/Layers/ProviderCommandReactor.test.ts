@@ -1225,6 +1225,21 @@ describe("ProviderCommandReactor", () => {
     expect(providerInput.input).toContain('"text": "useful context"');
     expect(providerInput.input).not.toContain("response-annotation-1");
     expect(providerInput.input).toContain("## My request:\nAddress this passage");
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads
+          .find((thread) => thread.id === ThreadId.make("thread-1"))
+          ?.messages.find((message) => message.id === asMessageId("user-message-annotations"))
+          ?.turnId === asTurnId("turn-1")
+      );
+    });
+    const readModel = await harness.readModel();
+    const annotatedMessage = readModel.threads
+      .find((thread) => thread.id === ThreadId.make("thread-1"))
+      ?.messages.find((message) => message.id === asMessageId("user-message-annotations"));
+    expect(annotatedMessage?.turnId).toBe(asTurnId("turn-1"));
   });
 
   effectIt.effect("projects starting before a slow provider session finishes", () =>

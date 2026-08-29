@@ -1,4 +1,4 @@
-import { MessageId, ResponseAnnotationId, ThreadId } from "@t3tools/contracts";
+import { MessageId, ResponseAnnotationId, ThreadId, TurnId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -223,6 +223,26 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.equal(row._tag, "Some");
       if (row._tag === "Some") {
         assert.deepEqual(row.value.responseAnnotations, responseAnnotations);
+      }
+
+      const turnId = TurnId.make("turn-response-annotations");
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId,
+        role: "user",
+        text: "Please explain more.",
+        responseAnnotations,
+        isStreaming: false,
+        createdAt,
+        updatedAt: "2026-02-28T19:20:02.000Z",
+      });
+
+      const rebound = yield* repository.getByMessageId({ messageId });
+      assert.equal(rebound._tag, "Some");
+      if (rebound._tag === "Some") {
+        assert.equal(rebound.value.turnId, turnId);
+        assert.deepEqual(rebound.value.responseAnnotations, responseAnnotations);
       }
     }),
   );

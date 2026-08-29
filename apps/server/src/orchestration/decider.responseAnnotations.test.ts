@@ -2,9 +2,11 @@ import {
   CommandId,
   MessageId,
   ProjectId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderInstanceId,
   ResponseAnnotationId,
   ThreadId,
+  TurnId,
   type OrchestrationReadModel,
   type OrchestrationThread,
 } from "@t3tools/contracts";
@@ -65,6 +67,31 @@ const annotation = {
   sourceRange: { start: 4, end: 19, prefix: "The ", suffix: "." },
   comment: "Explain this.",
 };
+
+function makeTurnStartCommand(input: {
+  readonly commandId: string;
+  readonly messageId: string;
+  readonly text: string;
+  readonly responseAnnotations?: ReadonlyArray<typeof annotation>;
+}) {
+  return {
+    type: "thread.turn.start" as const,
+    commandId: CommandId.make(input.commandId),
+    threadId: ThreadId.make("thread-1"),
+    message: {
+      messageId: MessageId.make(input.messageId),
+      role: "user" as const,
+      text: input.text,
+      attachments: [],
+      ...(input.responseAnnotations !== undefined
+        ? { responseAnnotations: input.responseAnnotations }
+        : {}),
+    },
+    createdAt: NOW,
+    runtimeMode: "full-access" as const,
+    interactionMode: "default" as const,
+  };
+}
 
 it.layer(NodeServices.layer)("response annotation decider", (it) => {
   it.effect("copies valid annotations to the user message event", () =>
@@ -214,6 +241,101 @@ it.layer(NodeServices.layer)("response annotation decider", (it) => {
       }).pipe(Effect.flip);
 
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("accepts the aggregate provider-input limit at the boundary", () =>
+    Effect.gen(function* () {
+      const text = "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+      const result = yield* decideOrchestrationCommand({
+        command: makeTurnStartCommand({
+          commandId: "cmd-annotations-at-limit",
+          messageId: "user-at-limit",
+          text,
+        }),
+        readModel: makeReadModel([]),
+      });
+
+      expect(Array.isArray(result)).toBe(true);
+    }),
+  );
+
+  it.effect("rejects an oversized annotation envelope before emitting a message event", () =>
+    Effect.gen(function* () {
+      const oversizedAnnotations = Array.from({ length: 20 }, (_, index) => ({
+        ...annotation,
+        id: ResponseAnnotationId.make(`annotation-oversized-${index}`),
+        selectedText: "x".repeat(8_000),
+        sourceRange: { start: 0, end: 8_000, prefix: "", suffix: "" },
+      }));
+      const error = yield* decideOrchestrationCommand({
+        command: makeTurnStartCommand({
+          commandId: "cmd-annotations-over-limit",
+          messageId: "user-over-limit",
+          text: "",
+          responseAnnotations: oversizedAnnotations,
+        }),
+        readModel: makeReadModel([]),
+        validationContext: {
+          assistantMessageIds: new Set([sourceMessage.id]),
+        },
+      }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("binds an annotated user message idempotently to the provider turn", () =>
+    Effect.gen(function* () {
+      const message = {
+        id: MessageId.make("user-bind"),
+        role: "user" as const,
+        text: "Explain this",
+        turnId: null,
+        streaming: false,
+        createdAt: NOW,
+        updatedAt: NOW,
+        responseAnnotations: [annotation],
+      };
+      const command = {
+        type: "thread.response-annotations.bind-turn" as const,
+        commandId: CommandId.make("cmd-bind-annotations"),
+        threadId: ThreadId.make("thread-1"),
+        messageId: message.id,
+        turnId: TurnId.make("turn-bind"),
+        createdAt: NOW,
+      };
+      const first = yield* decideOrchestrationCommand({
+        command,
+        readModel: makeReadModel([message]),
+      });
+      expect(first).toMatchObject({
+        type: "thread.message-sent",
+        payload: {
+          messageId: message.id,
+          role: "user",
+          text: message.text,
+          responseAnnotations: message.responseAnnotations,
+          turnId: command.turnId,
+          streaming: false,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        },
+      });
+
+      const reboundMessage = { ...message, turnId: command.turnId };
+      const second = yield* decideOrchestrationCommand({
+        command: { ...command, commandId: CommandId.make("cmd-bind-annotations-retry") },
+        readModel: makeReadModel([reboundMessage]),
+      });
+      expect(second).toMatchObject({
+        type: "thread.message-sent",
+        payload: {
+          messageId: message.id,
+          responseAnnotations: message.responseAnnotations,
+          turnId: command.turnId,
+        },
+      });
     }),
   );
 });

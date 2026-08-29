@@ -1,6 +1,7 @@
 import {
   EventId,
   MessageId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   UserInputRequestedPayload,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -33,6 +34,7 @@ import {
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
+import { formatResponseAnnotationPrompt } from "@t3tools/shared/responseAnnotations";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const decodeUserInputRequestedPayload = Schema.decodeUnknownOption(UserInputRequestedPayload);
@@ -976,6 +978,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
         });
       }
+
+      // Validate the provider-facing annotation envelope before persisting the
+      // user message. ProviderService repeats the final check after attachment
+      // paths are appended, but an annotation-only turn must never be allowed
+      // to enter history if its own prompt is already undeliverable.
+      const normalizedMessageText = command.message.text.trim();
+      const formattedProviderInput = formatResponseAnnotationPrompt(
+        normalizedMessageText.length > 0 ? normalizedMessageText : undefined,
+        responseAnnotations?.map((annotation) => ({
+          selectedText: annotation.selectedText,
+          comment: annotation.comment,
+        })),
+      );
+      if (
+        formattedProviderInput !== undefined &&
+        formattedProviderInput.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Provider input including response annotations must be at most ${PROVIDER_SEND_TURN_MAX_INPUT_CHARS} characters.`,
+        });
+      }
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1312,6 +1336,58 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [unsettledEvent, sessionSetEvent];
+    }
+
+    case "thread.response-annotations.bind-turn": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const message = thread.messages.find((entry) => entry.id === command.messageId);
+      if (!message || message.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' was not found on thread '${thread.id}'.`,
+        });
+      }
+      if (message.responseAnnotations === undefined || message.responseAnnotations.length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' has no response annotations to bind.`,
+        });
+      }
+      if (message.turnId !== null && message.turnId !== command.turnId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `User message '${command.messageId}' is already bound to turn '${message.turnId}'.`,
+        });
+      }
+
+      // Re-emit the existing message event rather than introducing a second
+      // event shape. Replaying the bind command is safe because it produces
+      // the same message projection state for the same turn.
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.message-sent",
+        payload: {
+          threadId: thread.id,
+          messageId: message.id,
+          role: message.role,
+          text: message.text,
+          ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+          responseAnnotations: message.responseAnnotations,
+          turnId: command.turnId,
+          streaming: message.streaming,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        },
+      };
     }
 
     case "thread.message.assistant.delta": {

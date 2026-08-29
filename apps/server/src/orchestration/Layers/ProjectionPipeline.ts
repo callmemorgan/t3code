@@ -1400,58 +1400,84 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
             threadId: event.payload.threadId,
           });
+          // A provider turn id can arrive after the user-message event that
+          // binds it (or before it). Prefer that durable exact association
+          // over the one-slot pending-start fallback. The fallback is still
+          // useful for legacy/unannotated starts, but must not donate its
+          // source-plan metadata to a different bound message.
+          const projectedMessages = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const boundUserMessage = projectedMessages.find(
+            (message) => message.role === "user" && message.turnId === turnId,
+          );
+          const exactPendingTurnStart =
+            Option.isSome(pendingTurnStart) &&
+            (boundUserMessage === undefined ||
+              pendingTurnStart.value.messageId === boundUserMessage.messageId)
+              ? pendingTurnStart
+              : Option.none();
+          const pendingMessageId =
+            boundUserMessage?.messageId ??
+            (Option.isSome(exactPendingTurnStart) ? exactPendingTurnStart.value.messageId : null);
           if (Option.isSome(existingTurn)) {
             const nextState =
               existingTurn.value.state === "completed" || existingTurn.value.state === "error"
                 ? existingTurn.value.state
                 : "running";
+            const existingPendingMessageMismatch =
+              boundUserMessage !== undefined &&
+              existingTurn.value.pendingMessageId !== null &&
+              existingTurn.value.pendingMessageId !== boundUserMessage.messageId;
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               state: nextState,
               pendingMessageId:
+                boundUserMessage?.messageId ??
                 existingTurn.value.pendingMessageId ??
-                (Option.isSome(pendingTurnStart) ? pendingTurnStart.value.messageId : null),
-              sourceProposedPlanThreadId:
-                existingTurn.value.sourceProposedPlanThreadId ??
-                (Option.isSome(pendingTurnStart)
-                  ? pendingTurnStart.value.sourceProposedPlanThreadId
-                  : null),
-              sourceProposedPlanId:
-                existingTurn.value.sourceProposedPlanId ??
-                (Option.isSome(pendingTurnStart)
-                  ? pendingTurnStart.value.sourceProposedPlanId
-                  : null),
+                pendingMessageId,
+              sourceProposedPlanThreadId: existingPendingMessageMismatch
+                ? null
+                : (existingTurn.value.sourceProposedPlanThreadId ??
+                  (Option.isSome(exactPendingTurnStart)
+                    ? exactPendingTurnStart.value.sourceProposedPlanThreadId
+                    : null)),
+              sourceProposedPlanId: existingPendingMessageMismatch
+                ? null
+                : (existingTurn.value.sourceProposedPlanId ??
+                  (Option.isSome(exactPendingTurnStart)
+                    ? exactPendingTurnStart.value.sourceProposedPlanId
+                    : null)),
               startedAt:
                 existingTurn.value.startedAt ??
-                (Option.isSome(pendingTurnStart)
-                  ? pendingTurnStart.value.requestedAt
+                (Option.isSome(exactPendingTurnStart)
+                  ? exactPendingTurnStart.value.requestedAt
                   : event.occurredAt),
-              requestedAt:
-                existingTurn.value.requestedAt ??
-                (Option.isSome(pendingTurnStart)
-                  ? pendingTurnStart.value.requestedAt
-                  : event.occurredAt),
+              requestedAt: existingPendingMessageMismatch
+                ? boundUserMessage.createdAt
+                : (existingTurn.value.requestedAt ??
+                  (Option.isSome(exactPendingTurnStart)
+                    ? exactPendingTurnStart.value.requestedAt
+                    : event.occurredAt)),
             });
           } else {
             yield* projectionTurnRepository.upsertByTurnId({
               turnId,
               threadId: event.payload.threadId,
-              pendingMessageId: Option.isSome(pendingTurnStart)
-                ? pendingTurnStart.value.messageId
+              pendingMessageId,
+              sourceProposedPlanThreadId: Option.isSome(exactPendingTurnStart)
+                ? exactPendingTurnStart.value.sourceProposedPlanThreadId
                 : null,
-              sourceProposedPlanThreadId: Option.isSome(pendingTurnStart)
-                ? pendingTurnStart.value.sourceProposedPlanThreadId
-                : null,
-              sourceProposedPlanId: Option.isSome(pendingTurnStart)
-                ? pendingTurnStart.value.sourceProposedPlanId
+              sourceProposedPlanId: Option.isSome(exactPendingTurnStart)
+                ? exactPendingTurnStart.value.sourceProposedPlanId
                 : null,
               assistantMessageId: null,
               state: "running",
-              requestedAt: Option.isSome(pendingTurnStart)
-                ? pendingTurnStart.value.requestedAt
+              requestedAt: Option.isSome(exactPendingTurnStart)
+                ? exactPendingTurnStart.value.requestedAt
                 : event.occurredAt,
-              startedAt: Option.isSome(pendingTurnStart)
-                ? pendingTurnStart.value.requestedAt
+              startedAt: Option.isSome(exactPendingTurnStart)
+                ? exactPendingTurnStart.value.requestedAt
                 : event.occurredAt,
               completedAt: null,
               checkpointTurnCount: null,
@@ -1461,16 +1487,64 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             });
           }
 
-          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
-            threadId: event.payload.threadId,
-          });
+          if (Option.isSome(exactPendingTurnStart)) {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          }
           return;
         }
 
         case "thread.message-sent": {
-          if (event.payload.turnId === null || event.payload.role !== "assistant") {
+          if (event.payload.turnId === null) {
             return;
           }
+
+          if (event.payload.role === "user") {
+            const existingTurn = yield* projectionTurnRepository.getByTurnId({
+              threadId: event.payload.threadId,
+              turnId: event.payload.turnId,
+            });
+            if (Option.isSome(existingTurn)) {
+              const hasDifferentPendingMessage =
+                existingTurn.value.pendingMessageId !== null &&
+                existingTurn.value.pendingMessageId !== event.payload.messageId;
+              yield* projectionTurnRepository.upsertByTurnId({
+                ...existingTurn.value,
+                // This event is the durable exact binding. It wins over a
+                // stale one-slot fallback that may have been attached when a
+                // session-set event arrived first.
+                pendingMessageId: event.payload.messageId,
+                ...(hasDifferentPendingMessage
+                  ? {
+                      sourceProposedPlanThreadId: null,
+                      sourceProposedPlanId: null,
+                      requestedAt: event.payload.createdAt,
+                    }
+                  : {}),
+              });
+              return;
+            }
+
+            yield* projectionTurnRepository.upsertByTurnId({
+              turnId: event.payload.turnId,
+              threadId: event.payload.threadId,
+              pendingMessageId: event.payload.messageId,
+              sourceProposedPlanThreadId: null,
+              sourceProposedPlanId: null,
+              assistantMessageId: null,
+              state: "running",
+              requestedAt: event.payload.createdAt,
+              startedAt: event.payload.createdAt,
+              completedAt: null,
+              checkpointTurnCount: null,
+              checkpointRef: null,
+              checkpointStatus: null,
+              checkpointFiles: [],
+            });
+            return;
+          }
+
           // A completed assistant message only settles the turn once the
           // session is no longer running it — providers may emit several
           // assistant messages per turn (commentary between tool calls), and

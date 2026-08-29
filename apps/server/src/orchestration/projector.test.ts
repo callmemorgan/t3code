@@ -576,9 +576,35 @@ describe("orchestration projector", () => {
       ),
     );
 
-    expect(afterUpdate.threads[0]?.messages[0]).toMatchObject({
+    const afterBind = await Effect.runPromise(
+      projectEvent(
+        afterUpdate,
+        makeEvent({
+          sequence: 4,
+          type: "thread.message-sent",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T09:30:02.000Z",
+          commandId: "cmd-user-message-bind",
+          payload: {
+            threadId: "thread-1",
+            messageId: "user-message-1",
+            role: "user",
+            text: "Please explain more.",
+            responseAnnotations,
+            turnId: "turn-response-annotations",
+            streaming: false,
+            createdAt,
+            updatedAt: "2026-02-23T09:30:02.000Z",
+          },
+        }),
+      ),
+    );
+
+    expect(afterBind.threads[0]?.messages[0]).toMatchObject({
       text: "Please explain more.",
       responseAnnotations,
+      turnId: "turn-response-annotations",
     });
   });
 

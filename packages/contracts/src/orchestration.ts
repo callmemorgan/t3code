@@ -1160,6 +1160,21 @@ const ThreadSessionSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Server-only completion of the user-message/turn correlation established by
+ * the provider runtime. The original turn-start command persists the user
+ * message before a provider turn id exists; this command updates that same
+ * message once `ProviderService.sendTurn` returns its exact turn id.
+ */
+export const ThreadResponseAnnotationsBindTurnCommand = Schema.Struct({
+  type: Schema.Literal("thread.response-annotations.bind-turn"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  turnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   type: Schema.Literal("thread.message.assistant.delta"),
   commandId: CommandId,
@@ -1228,6 +1243,7 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
   ThreadSessionSetCommand,
+  ThreadResponseAnnotationsBindTurnCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
