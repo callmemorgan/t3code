@@ -295,6 +295,17 @@ export function responseAnnotationEditorPresentation(number: number, editable: b
   } as const;
 }
 
+export function responseAnnotationTooltipContent(annotation: ResponseAnnotation, number: number) {
+  const comment = annotation.comment.trim();
+  return {
+    title: `Annotation ${number}`,
+    selectedText: annotation.selectedText,
+    comment: comment.length > 0 ? comment : null,
+    description:
+      comment.length > 0 ? `${annotation.selectedText}. ${comment}` : annotation.selectedText,
+  } as const;
+}
+
 function rangeClientRects(range: Range): ResponseAnnotationFloatingRect[] {
   const rects = Array.from(range.getClientRects?.() ?? []);
   const usableRects = rects.filter((rect) => rect.width > 0 || rect.height > 0);
@@ -427,9 +438,7 @@ export function ResponseAnnotationSourceMarkers({
       {markers.map((marker, index) => {
         const { annotation, number, editable } = marker;
         const placement = placements.find((candidate) => candidate.annotation.id === annotation.id);
-        const description = annotation.comment.trim()
-          ? `${annotation.selectedText}. ${annotation.comment.trim()}`
-          : annotation.selectedText;
+        const tooltip = responseAnnotationTooltipContent(annotation, number);
         return (
           <Tooltip key={annotation.id}>
             <TooltipTrigger
@@ -447,7 +456,9 @@ export function ResponseAnnotationSourceMarkers({
                   data-response-annotation-marker={annotation.id}
                   data-response-annotation-marker-editable={editable ? "true" : "false"}
                   aria-label={
-                    editable ? `Edit Annotation ${number}` : `Annotation ${number}: ${description}`
+                    editable
+                      ? `Edit Annotation ${number}`
+                      : `Annotation ${number}: ${tooltip.description}`
                   }
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
@@ -459,11 +470,18 @@ export function ResponseAnnotationSourceMarkers({
                 </button>
               }
             />
-            <TooltipPopup
-              side="top"
-              className="max-w-[min(32rem,calc(100vw-2rem))] whitespace-pre-wrap wrap-anywhere"
-            >
-              {editable ? `Annotation ${number}` : `Annotation ${number}: ${description}`}
+            <TooltipPopup side="top" className="max-w-[min(32rem,calc(100vw-2rem))] text-left">
+              <span className="flex min-w-0 flex-col gap-1 py-0.5">
+                <span className="font-medium text-foreground">{tooltip.title}</span>
+                <span className="line-clamp-3 whitespace-pre-wrap wrap-anywhere text-muted-foreground">
+                  {tooltip.selectedText}
+                </span>
+                {tooltip.comment ? (
+                  <span className="line-clamp-4 whitespace-pre-wrap wrap-anywhere text-foreground">
+                    {tooltip.comment}
+                  </span>
+                ) : null}
+              </span>
             </TooltipPopup>
           </Tooltip>
         );

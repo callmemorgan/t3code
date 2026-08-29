@@ -10,6 +10,7 @@ import {
   responseAnnotationEditorPresentation,
   responseAnnotationEditorPosition,
   responseAnnotationMarkerPosition,
+  responseAnnotationTooltipContent,
   ResponseAnnotationSourceMarkers,
   ResponseAnnotationSourceRoot,
   ResponseAnnotationTimelineController,
@@ -130,6 +131,27 @@ describe("response annotation timeline controller", () => {
       ariaLabel: "Edit Annotation 3",
       closeLabel: "Cancel",
       readOnly: false,
+    });
+  });
+
+  it("shows source text and the saved comment in marker tooltips", () => {
+    const withComment = {
+      ...annotation("commented", "selected assistant passage"),
+      comment: "  Explain why this matters.  ",
+    };
+
+    expect(responseAnnotationTooltipContent(withComment, 2)).toEqual({
+      title: "Annotation 2",
+      selectedText: "selected assistant passage",
+      comment: "Explain why this matters.",
+      description: "selected assistant passage. Explain why this matters.",
+    });
+    expect(
+      responseAnnotationTooltipContent(annotation("without-comment", "selected text"), 1),
+    ).toMatchObject({
+      title: "Annotation 1",
+      selectedText: "selected text",
+      comment: null,
     });
   });
 
