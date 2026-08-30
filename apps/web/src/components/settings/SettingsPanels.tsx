@@ -34,6 +34,7 @@ import {
   MIN_PROMPT_FONT_SIZE,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_TERMINAL_FONT_SIZE,
+  type TerminalOpenLocation,
 } from "@t3tools/contracts/settings";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -158,6 +159,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+
+const TERMINAL_OPEN_LOCATION_LABELS: Record<TerminalOpenLocation, string> = {
+  bottom: "Bottom panel",
+  right: "Right panel",
+};
 
 const BACKGROUND_ACTIVITY_PROFILE_LABELS: Record<BackgroundActivityProfile, string> = {
   balanced: "Balanced",
@@ -488,6 +494,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
+      ...(settings.terminalOpenLocation !== DEFAULT_UNIFIED_SETTINGS.terminalOpenLocation
+        ? ["Terminal opens in"]
+        : []),
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
@@ -581,6 +590,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
+      settings.terminalOpenLocation,
       settings.timestampFormat,
       settings.wordWrap,
       followSystem,
@@ -654,6 +664,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     updateSettings({
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
+      terminalOpenLocation: DEFAULT_UNIFIED_SETTINGS.terminalOpenLocation,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
@@ -2054,6 +2065,47 @@ export function GeneralSettingsPanel() {
                 </SelectItem>
                 <SelectItem hideIndicator value="24-hour">
                   {TIMESTAMP_FORMAT_LABELS["24-hour"]}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("terminal-open-location")}
+          description="Choose where terminal actions, shortcuts, and project scripts open terminals."
+          resetAction={
+            settings.terminalOpenLocation !== DEFAULT_UNIFIED_SETTINGS.terminalOpenLocation ? (
+              <SettingResetButton
+                label="terminal open location"
+                onClick={() =>
+                  updateSettings({
+                    terminalOpenLocation: DEFAULT_UNIFIED_SETTINGS.terminalOpenLocation,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.terminalOpenLocation}
+              onValueChange={(value) => {
+                if (value === "bottom" || value === "right") {
+                  updateSettings({ terminalOpenLocation: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Terminal open location">
+                <SelectValue>
+                  {TERMINAL_OPEN_LOCATION_LABELS[settings.terminalOpenLocation]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="bottom">
+                  {TERMINAL_OPEN_LOCATION_LABELS.bottom}
+                </SelectItem>
+                <SelectItem hideIndicator value="right">
+                  {TERMINAL_OPEN_LOCATION_LABELS.right}
                 </SelectItem>
               </SelectPopup>
             </Select>

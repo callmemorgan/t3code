@@ -80,6 +80,10 @@ describe("searchSettings", () => {
 
   it("serves anchor props to panels from the catalog", () => {
     expect(searchableSetting("word-wrap")).toEqual({ id: "word-wrap", title: "Word wrap" });
+    expect(searchableSetting("terminal-open-location")).toEqual({
+      id: "terminal-open-location",
+      title: "Terminal opens in",
+    });
     expect(searchableSetting("archive")).toEqual({ id: "archive", title: "Archived threads" });
   });
 
@@ -96,6 +100,13 @@ describe("searchSettings", () => {
       id: "environment-identification",
       to: "/settings/appearance",
       targetId: "appearance",
+    });
+  });
+
+  it("routes the terminal location setting to General", () => {
+    expect(searchSettings("terminal opens in")[0]).toMatchObject({
+      id: "terminal-open-location",
+      to: "/settings/general",
     });
   });
 });

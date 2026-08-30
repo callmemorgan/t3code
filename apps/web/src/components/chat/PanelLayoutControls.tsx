@@ -1,3 +1,4 @@
+import type { TerminalOpenLocation } from "@t3tools/contracts";
 import { Maximize2Icon, Minimize2Icon, PanelBottomIcon, PanelRightIcon } from "lucide-react";
 import { memo } from "react";
 
@@ -7,6 +8,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 interface PanelLayoutControlsProps {
   showTerminalControl?: boolean;
   terminalAvailable: boolean;
+  terminalLocation?: TerminalOpenLocation;
   terminalOpen: boolean;
   terminalShortcutLabel: string | null;
   rightPanelAvailable: boolean;
@@ -22,6 +24,7 @@ interface PanelLayoutControlsProps {
 export const PanelLayoutControls = memo(function PanelLayoutControls({
   showTerminalControl = true,
   terminalAvailable,
+  terminalLocation = "bottom",
   terminalOpen,
   terminalShortcutLabel,
   rightPanelAvailable,
@@ -32,6 +35,13 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   onToggleTerminal,
   onToggleRightPanel,
 }: PanelLayoutControlsProps) {
+  const terminalToggleLabel =
+    terminalLocation === "right" ? "Toggle terminal in right panel" : "Toggle bottom terminal";
+  const terminalUnavailableLabel =
+    terminalLocation === "right"
+      ? "Terminal in right panel is unavailable"
+      : "Bottom terminal is unavailable";
+
   return (
     <div
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
@@ -44,18 +54,22 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               className="shrink-0 [-webkit-app-region:no-drag]"
               pressed={terminalOpen}
               onPressedChange={onToggleTerminal}
-              aria-label="Toggle terminal drawer"
+              aria-label={terminalToggleLabel}
               variant="ghost"
               size="sm"
               disabled={!terminalAvailable}
             >
-              <PanelBottomIcon className="size-4" />
+              {terminalLocation === "right" ? (
+                <PanelRightIcon className="size-4" />
+              ) : (
+                <PanelBottomIcon className="size-4" />
+              )}
             </Toggle>
           </TooltipTrigger>
           <TooltipPopup side="bottom">
             {terminalAvailable
-              ? `Toggle terminal drawer${terminalShortcutLabel ? ` (${terminalShortcutLabel})` : ""}`
-              : "Terminal drawer is unavailable"}
+              ? `${terminalToggleLabel}${terminalShortcutLabel ? ` (${terminalShortcutLabel})` : ""}`
+              : terminalUnavailableLabel}
           </TooltipPopup>
         </Tooltip>
       ) : null}

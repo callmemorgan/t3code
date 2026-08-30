@@ -9,6 +9,7 @@ import {
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
+  type TerminalOpenLocation,
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
@@ -31,6 +32,7 @@ import {
 import type { DraftThreadEnvMode } from "../composerDraftStore";
 import type { ComposerSubmissionIntent } from "../composer-logic";
 import type { TimelineEntry } from "../session-logic";
+import type { RightPanelSurface, ThreadRightPanelState } from "../rightPanelStore";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
@@ -38,6 +40,132 @@ export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
+
+type TerminalSurface = Extract<RightPanelSurface, { kind: "terminal" }>;
+
+export function resolveBottomTerminalId(input: {
+  activeTerminalId: string;
+  knownTerminalIds: ReadonlyArray<string>;
+  panelTerminalIds: ReadonlySet<string>;
+}): string | null {
+  if (input.activeTerminalId && !input.panelTerminalIds.has(input.activeTerminalId)) {
+    return input.activeTerminalId;
+  }
+  return (
+    input.knownTerminalIds.find((terminalId) => !input.panelTerminalIds.has(terminalId)) ?? null
+  );
+}
+
+export type TerminalToggleTarget =
+  | { type: "toggle-bottom" }
+  | { type: "hide-right" }
+  | { type: "show-right"; surfaceId: string; terminalId: string }
+  | { type: "create-right" };
+
+function preferredRightTerminalSurface(input: {
+  activeSurfaceId: string | null;
+  surfaces: ReadonlyArray<RightPanelSurface>;
+}): TerminalSurface | null {
+  const activeSurface = input.surfaces.find(
+    (surface): surface is TerminalSurface =>
+      surface.id === input.activeSurfaceId && surface.kind === "terminal",
+  );
+  if (activeSurface) return activeSurface;
+
+  return (
+    input.surfaces.findLast((surface): surface is TerminalSurface => surface.kind === "terminal") ??
+    null
+  );
+}
+
+export function resolveTerminalToggleAction(input: {
+  terminalOpenLocation: TerminalOpenLocation;
+  rightPanelState: ThreadRightPanelState;
+}): TerminalToggleTarget {
+  if (input.terminalOpenLocation === "bottom") {
+    return { type: "toggle-bottom" };
+  }
+
+  const terminalSurface = preferredRightTerminalSurface({
+    activeSurfaceId: input.rightPanelState.activeSurfaceId,
+    surfaces: input.rightPanelState.surfaces,
+  });
+  if (!terminalSurface) {
+    return { type: "create-right" };
+  }
+  if (
+    input.rightPanelState.isOpen &&
+    terminalSurface.id === input.rightPanelState.activeSurfaceId
+  ) {
+    return { type: "hide-right" };
+  }
+  return {
+    type: "show-right",
+    surfaceId: terminalSurface.id,
+    terminalId: terminalSurface.activeTerminalId,
+  };
+}
+
+export type TerminalScriptTarget =
+  | { location: "bottom"; terminalId: string; createNew: boolean; surfaceId: null }
+  | { location: "right"; terminalId: string; createNew: false; surfaceId: string }
+  | { location: "right"; terminalId: string; createNew: true; surfaceId: null };
+
+export function resolveProjectScriptTerminalTarget(input: {
+  terminalOpenLocation: TerminalOpenLocation;
+  bottomTerminalId: string | null;
+  rightPanelState: ThreadRightPanelState;
+  runningTerminalIds: ReadonlyArray<string>;
+  preferNewTerminal: boolean;
+  nextTerminalId: string;
+}): TerminalScriptTarget {
+  if (input.terminalOpenLocation === "bottom") {
+    const bottomTerminalId = input.bottomTerminalId;
+    if (
+      bottomTerminalId === null ||
+      input.preferNewTerminal ||
+      input.runningTerminalIds.includes(bottomTerminalId)
+    ) {
+      return {
+        location: "bottom",
+        terminalId: input.nextTerminalId,
+        createNew: true,
+        surfaceId: null,
+      };
+    }
+    return {
+      location: "bottom",
+      terminalId: bottomTerminalId,
+      createNew: false,
+      surfaceId: null,
+    };
+  }
+
+  const terminalSurface = preferredRightTerminalSurface({
+    activeSurfaceId: input.rightPanelState.activeSurfaceId,
+    surfaces: input.rightPanelState.surfaces,
+  });
+  const terminalId = terminalSurface?.activeTerminalId;
+  if (
+    terminalSurface &&
+    terminalId !== undefined &&
+    !input.preferNewTerminal &&
+    !input.runningTerminalIds.includes(terminalId)
+  ) {
+    return {
+      location: "right",
+      surfaceId: terminalSurface.id,
+      terminalId,
+      createNew: false,
+    };
+  }
+  return {
+    location: "right",
+    terminalId: input.nextTerminalId,
+    createNew: true,
+    surfaceId: null,
+  };
+}
 
 export function shoulderTabReserve(overlay: HTMLElement): number {
   if (overlay.querySelector(".chat-composer-tasks-tab")) return 0;

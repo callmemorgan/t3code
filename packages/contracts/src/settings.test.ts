@@ -66,6 +66,29 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings terminal open location", () => {
+  it("defaults terminals to the bottom panel", () => {
+    expect(decodeClientSettings({}).terminalOpenLocation).toBe("bottom");
+  });
+
+  it("accepts both terminal locations through settings and patch boundaries", () => {
+    expect(decodeClientSettings({ terminalOpenLocation: "right" }).terminalOpenLocation).toBe(
+      "right",
+    );
+    expect(decodeClientSettingsPatch({ terminalOpenLocation: "right" }).terminalOpenLocation).toBe(
+      "right",
+    );
+    expect(decodeClientSettingsPatch({ terminalOpenLocation: "bottom" }).terminalOpenLocation).toBe(
+      "bottom",
+    );
+  });
+
+  it("rejects unsupported terminal locations", () => {
+    expect(() => decodeClientSettings({ terminalOpenLocation: "left" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ terminalOpenLocation: "left" })).toThrow();
+  });
+});
+
 describe("ClientSettings glass opacity", () => {
   it("defaults to a readable translucent surface", () => {
     expect(decodeClientSettings({}).glassOpacity).toBe(80);

@@ -26,6 +26,9 @@ import {
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveBottomTerminalId,
+  resolveProjectScriptTerminalTarget,
+  resolveTerminalToggleAction,
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftPromotionNavigationTarget,
   resolveThreadMetadataUpdateForNextTurn,
@@ -40,6 +43,201 @@ import {
   shouldShowPlanFollowUpPrompt,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
+
+const terminalSurface = (terminalId: string) => ({
+  id: `terminal:${terminalId}` as const,
+  kind: "terminal" as const,
+  resourceId: terminalId,
+  terminalIds: [terminalId],
+  activeTerminalId: terminalId,
+});
+
+describe("terminal open-location routing", () => {
+  const firstTerminal = terminalSurface("term-1");
+  const secondTerminal = terminalSurface("term-2");
+  const filesSurface = { id: "files", kind: "files" } as const;
+
+  it("keeps bottom placement on the drawer toggle path", () => {
+    expect(
+      resolveTerminalToggleAction({
+        terminalOpenLocation: "bottom",
+        rightPanelState: {
+          isOpen: true,
+          activeSurfaceId: secondTerminal.id,
+          surfaces: [firstTerminal, secondTerminal],
+        },
+      }),
+    ).toEqual({ type: "toggle-bottom" });
+  });
+
+  it("hides an open panel whose active tab is a terminal", () => {
+    expect(
+      resolveTerminalToggleAction({
+        terminalOpenLocation: "right",
+        rightPanelState: {
+          isOpen: true,
+          activeSurfaceId: secondTerminal.id,
+          surfaces: [firstTerminal, secondTerminal],
+        },
+      }),
+    ).toEqual({ type: "hide-right" });
+  });
+
+  it("shows the selected terminal when the panel is hidden", () => {
+    expect(
+      resolveTerminalToggleAction({
+        terminalOpenLocation: "right",
+        rightPanelState: {
+          isOpen: false,
+          activeSurfaceId: firstTerminal.id,
+          surfaces: [firstTerminal, secondTerminal],
+        },
+      }),
+    ).toEqual({
+      type: "show-right",
+      surfaceId: firstTerminal.id,
+      terminalId: "term-1",
+    });
+  });
+
+  it("falls back to the rightmost terminal tab", () => {
+    expect(
+      resolveTerminalToggleAction({
+        terminalOpenLocation: "right",
+        rightPanelState: {
+          isOpen: true,
+          activeSurfaceId: filesSurface.id,
+          surfaces: [firstTerminal, filesSurface, secondTerminal],
+        },
+      }),
+    ).toEqual({
+      type: "show-right",
+      surfaceId: secondTerminal.id,
+      terminalId: "term-2",
+    });
+  });
+
+  it("creates a right terminal when no terminal tab exists", () => {
+    expect(
+      resolveTerminalToggleAction({
+        terminalOpenLocation: "right",
+        rightPanelState: {
+          isOpen: true,
+          activeSurfaceId: filesSurface.id,
+          surfaces: [filesSurface],
+        },
+      }),
+    ).toEqual({ type: "create-right" });
+  });
+});
+
+describe("project script terminal routing", () => {
+  const firstTerminal = terminalSurface("term-1");
+  const secondTerminal = terminalSurface("term-2");
+  const baseInput = {
+    terminalOpenLocation: "right" as const,
+    bottomTerminalId: "drawer-1",
+    rightPanelState: {
+      isOpen: true,
+      activeSurfaceId: secondTerminal.id,
+      surfaces: [firstTerminal, secondTerminal],
+    },
+    runningTerminalIds: [] as string[],
+    preferNewTerminal: false,
+    nextTerminalId: "term-3",
+  };
+
+  it("does not reuse a right-panel terminal for a bottom script", () => {
+    expect(
+      resolveBottomTerminalId({
+        activeTerminalId: "panel-1",
+        knownTerminalIds: ["panel-1", "drawer-1"],
+        panelTerminalIds: new Set(["panel-1"]),
+      }),
+    ).toBe("drawer-1");
+    expect(
+      resolveBottomTerminalId({
+        activeTerminalId: "term-1",
+        knownTerminalIds: ["term-1"],
+        panelTerminalIds: new Set(["term-1"]),
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves bottom terminal reuse and creation", () => {
+    expect(
+      resolveProjectScriptTerminalTarget({ ...baseInput, terminalOpenLocation: "bottom" }),
+    ).toEqual({
+      location: "bottom",
+      terminalId: "drawer-1",
+      createNew: false,
+      surfaceId: null,
+    });
+    expect(
+      resolveProjectScriptTerminalTarget({
+        ...baseInput,
+        terminalOpenLocation: "bottom",
+        runningTerminalIds: ["drawer-1"],
+      }),
+    ).toEqual({
+      location: "bottom",
+      terminalId: "term-3",
+      createNew: true,
+      surfaceId: null,
+    });
+
+    expect(
+      resolveProjectScriptTerminalTarget({
+        ...baseInput,
+        terminalOpenLocation: "bottom",
+        bottomTerminalId: null,
+      }),
+    ).toEqual({
+      location: "bottom",
+      terminalId: "term-3",
+      createNew: true,
+      surfaceId: null,
+    });
+  });
+
+  it("reuses the selected right tab's idle active terminal", () => {
+    expect(resolveProjectScriptTerminalTarget(baseInput)).toEqual({
+      location: "right",
+      surfaceId: secondTerminal.id,
+      terminalId: "term-2",
+      createNew: false,
+    });
+  });
+
+  it("creates a right tab when the selected terminal is busy", () => {
+    expect(
+      resolveProjectScriptTerminalTarget({ ...baseInput, runningTerminalIds: ["term-2"] }),
+    ).toEqual({ location: "right", terminalId: "term-3", createNew: true, surfaceId: null });
+  });
+
+  it("creates a right tab when a new terminal is forced", () => {
+    expect(
+      resolveProjectScriptTerminalTarget({
+        ...baseInput,
+        preferNewTerminal: true,
+      }),
+    ).toEqual({
+      location: "right",
+      terminalId: "term-3",
+      createNew: true,
+      surfaceId: null,
+    });
+  });
+
+  it("creates a right tab when none exists", () => {
+    expect(
+      resolveProjectScriptTerminalTarget({
+        ...baseInput,
+        rightPanelState: { isOpen: false, activeSurfaceId: null, surfaces: [] },
+      }),
+    ).toEqual({ location: "right", terminalId: "term-3", createNew: true, surfaceId: null });
+  });
+});
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
