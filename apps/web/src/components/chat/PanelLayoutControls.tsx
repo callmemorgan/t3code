@@ -1,5 +1,11 @@
 import type { TerminalOpenLocation } from "@t3tools/contracts";
-import { Maximize2Icon, Minimize2Icon, PanelBottomIcon, PanelRightIcon } from "lucide-react";
+import {
+  Maximize2Icon,
+  Minimize2Icon,
+  PanelBottomIcon,
+  PanelRightIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { memo } from "react";
 
 import { Toggle } from "../ui/toggle";
@@ -7,10 +13,13 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface PanelLayoutControlsProps {
   showTerminalControl?: boolean;
+  showBottomPanelControl?: boolean;
   terminalAvailable: boolean;
   terminalLocation?: TerminalOpenLocation;
   terminalOpen: boolean;
   terminalShortcutLabel: string | null;
+  bottomPanelAvailable: boolean;
+  bottomPanelOpen: boolean;
   rightPanelAvailable: boolean;
   rightPanelOpen: boolean;
   rightPanelShortcutLabel: string | null;
@@ -18,29 +27,36 @@ interface PanelLayoutControlsProps {
   /** Running + waiting subagents in this thread; badges the right panel toggle. */
   liveAgentCount: number;
   onToggleTerminal: () => void;
+  onToggleBottomPanel: () => void;
   onToggleRightPanel: () => void;
 }
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
   showTerminalControl = true,
+  showBottomPanelControl = true,
   terminalAvailable,
   terminalLocation = "bottom",
   terminalOpen,
   terminalShortcutLabel,
+  bottomPanelAvailable,
+  bottomPanelOpen,
   rightPanelAvailable,
   rightPanelOpen,
   rightPanelShortcutLabel,
   rightPanelUnavailableLabel = "Right panel is unavailable",
   liveAgentCount,
   onToggleTerminal,
+  onToggleBottomPanel,
   onToggleRightPanel,
 }: PanelLayoutControlsProps) {
   const terminalToggleLabel =
-    terminalLocation === "right" ? "Toggle terminal in right panel" : "Toggle bottom terminal";
+    terminalLocation === "right"
+      ? "Toggle terminal in right panel"
+      : "Toggle terminal in bottom panel";
   const terminalUnavailableLabel =
     terminalLocation === "right"
       ? "Terminal in right panel is unavailable"
-      : "Bottom terminal is unavailable";
+      : "Terminal in bottom panel is unavailable";
 
   return (
     <div
@@ -59,17 +75,33 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               size="sm"
               disabled={!terminalAvailable}
             >
-              {terminalLocation === "right" ? (
-                <PanelRightIcon className="size-4" />
-              ) : (
-                <PanelBottomIcon className="size-4" />
-              )}
+              <TerminalIcon className="size-4" />
             </Toggle>
           </TooltipTrigger>
           <TooltipPopup side="bottom">
             {terminalAvailable
               ? `${terminalToggleLabel}${terminalShortcutLabel ? ` (${terminalShortcutLabel})` : ""}`
               : terminalUnavailableLabel}
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
+      {showBottomPanelControl ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <Toggle
+              className="shrink-0 [-webkit-app-region:no-drag]"
+              pressed={bottomPanelOpen}
+              onPressedChange={onToggleBottomPanel}
+              aria-label="Toggle bottom panel"
+              variant="ghost"
+              size="sm"
+              disabled={!bottomPanelAvailable}
+            >
+              <PanelBottomIcon className="size-4" />
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            {bottomPanelAvailable ? "Toggle bottom panel" : "Bottom panel is unavailable"}
           </TooltipPopup>
         </Tooltip>
       ) : null}

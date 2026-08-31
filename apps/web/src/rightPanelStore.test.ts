@@ -3,11 +3,16 @@ import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  BOTTOM_PANEL_TERMINAL_SURFACE,
+  findBrowserTabPanelLocation,
+  findPanelSurfaceLocation,
   migratePersistedRightPanelState,
   pullRequestSurfaceId,
+  selectActiveBottomPanelSurface,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
+  selectThreadBottomPanelState,
   selectThreadRightPanelState,
   updatePullRequestTabStatus,
   useRightPanelStore,
@@ -17,7 +22,7 @@ const refA = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-A"))
 const refB = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-B"));
 
 beforeEach(() => {
-  useRightPanelStore.setState({ byThreadKey: {} });
+  useRightPanelStore.setState({ byThreadKey: {}, bottomByThreadKey: {} });
 });
 
 describe("rightPanelStore", () => {
@@ -35,6 +40,7 @@ describe("rightPanelStore", () => {
         },
       }),
     ).toEqual({
+      bottomByThreadKey: {},
       byThreadKey: {
         "env-1:thread-A": {
           isOpen: false,
@@ -57,6 +63,7 @@ describe("rightPanelStore", () => {
         },
       }),
     ).toEqual({
+      bottomByThreadKey: {},
       byThreadKey: {
         "env-1:thread-A": {
           isOpen: true,
@@ -87,6 +94,7 @@ describe("rightPanelStore", () => {
         },
       }),
     ).toEqual({
+      bottomByThreadKey: {},
       byThreadKey: {
         "env-1:thread-A": {
           isOpen: true,
@@ -130,6 +138,7 @@ describe("rightPanelStore", () => {
         },
       }),
     ).toEqual({
+      bottomByThreadKey: {},
       byThreadKey: {
         "env-1:thread-A": {
           isOpen: true,
@@ -174,7 +183,10 @@ describe("rightPanelStore", () => {
           "env-1:thread-A": panelState,
         },
       }),
-    ).toEqual({ byThreadKey: { "env-1:thread-A": panelState } });
+    ).toEqual({
+      byThreadKey: { "env-1:thread-A": panelState },
+      bottomByThreadKey: {},
+    });
   });
 
   it("drops persisted plan surfaces and does not reopen an empty panel", () => {
@@ -197,6 +209,7 @@ describe("rightPanelStore", () => {
         },
       }),
     ).toEqual({
+      bottomByThreadKey: {},
       byThreadKey: {
         "env-1:thread-A": {
           isOpen: false,
@@ -210,6 +223,110 @@ describe("rightPanelStore", () => {
         },
       },
     });
+  });
+
+  it("migrates bottom-panel state and only accepts its stable terminal adapter", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "bottom:terminal",
+            surfaces: [BOTTOM_PANEL_TERMINAL_SURFACE, { id: "diff", kind: "diff" }],
+          },
+        },
+        bottomByThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "bottom:terminal",
+            surfaces: [
+              BOTTOM_PANEL_TERMINAL_SURFACE,
+              { id: "wrong", kind: "terminal-adapter" },
+              { id: "diff", kind: "diff" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {},
+      bottomByThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "bottom:terminal",
+          surfaces: [BOTTOM_PANEL_TERMINAL_SURFACE, { id: "diff", kind: "diff" }],
+        },
+      },
+    });
+  });
+
+  it("keeps legacy actions on the right and moves shared resources when opened at the bottom", () => {
+    useRightPanelStore.getState().open(refA, "diff");
+    expect(findPanelSurfaceLocation(useRightPanelStore.getState(), refA, "diff")).toBe("right");
+
+    useRightPanelStore.getState().openAt(refA, "bottom", "diff");
+
+    expect(findPanelSurfaceLocation(useRightPanelStore.getState(), refA, "diff")).toBe("bottom");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([]);
+    expect(
+      selectActiveBottomPanelSurface(useRightPanelStore.getState().bottomByThreadKey, refA),
+    ).toEqual({
+      id: "diff",
+      kind: "diff",
+    });
+  });
+
+  it("moves file and pull-request tabs between panels without duplicating them", () => {
+    const pullRequest = {
+      projectId: "project-a",
+      repository: "pingdotgg/t3code",
+      number: 4909,
+    };
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", 10);
+    useRightPanelStore.getState().openFileAt(refA, "bottom", "src/index.ts", 20);
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", 30);
+    useRightPanelStore.getState().openPullRequestAt(refA, "bottom", pullRequest);
+    useRightPanelStore.getState().openPullRequest(refA, pullRequest);
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([
+      {
+        id: "file:src/index.ts",
+        kind: "file",
+        relativePath: "src/index.ts",
+        revealLine: 30,
+        revealRequestId: 3,
+      },
+      expect.objectContaining({ id: pullRequestSurfaceId(pullRequest) }),
+    ]);
+    expect(
+      selectThreadBottomPanelState(useRightPanelStore.getState().bottomByThreadKey, refA).surfaces,
+    ).toEqual([]);
+  });
+
+  it("keeps owned browser tabs at the bottom and adds unowned sessions to the right", () => {
+    useRightPanelStore.getState().openBrowserAt(refA, "bottom", "tab-a");
+    useRightPanelStore.getState().reconcileBrowserSurfaces(refA, ["tab-a", "tab-b"]);
+
+    expect(findBrowserTabPanelLocation(useRightPanelStore.getState(), refA, "tab-a")).toBe(
+      "bottom",
+    );
+    expect(findBrowserTabPanelLocation(useRightPanelStore.getState(), refA, "tab-b")).toBe("right");
+  });
+
+  it("keeps the terminal adapter bottom-only and removes both panel states with the thread", () => {
+    useRightPanelStore.getState().openBottomTerminal(refA);
+    useRightPanelStore.getState().open(refA, "agents");
+    expect(
+      selectActiveBottomPanelSurface(useRightPanelStore.getState().bottomByThreadKey, refA),
+    ).toEqual(BOTTOM_PANEL_TERMINAL_SURFACE);
+
+    useRightPanelStore.getState().removeThread(refA);
+
+    expect(useRightPanelStore.getState().byThreadKey).toEqual({});
+    expect(useRightPanelStore.getState().bottomByThreadKey).toEqual({});
   });
 
   it("open sets the active panel for a thread", () => {

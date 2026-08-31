@@ -5,7 +5,7 @@ import {
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { type PanelLocation, useRightPanelStore } from "~/rightPanelStore";
 
 import { openPreviewSession } from "./openPreviewSession";
 
@@ -13,12 +13,20 @@ import { openPreviewSession } from "./openPreviewSession";
 export async function addBrowserSurface<E>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly openPreview: OpenPreviewMutation<E>;
+  readonly location?: PanelLocation;
+  /** Runs after the preview exists and immediately before its panel becomes active. */
+  readonly beforePanelOpen?: () => void;
 }): Promise<AtomCommandResult<void, E>> {
   const result = await openPreviewSession({
     openPreview: input.openPreview,
     threadRef: input.threadRef,
   });
   return mapAtomCommandResult(result, (snapshot) => {
+    input.beforePanelOpen?.();
+    if (input.location) {
+      useRightPanelStore.getState().openBrowserAt(input.threadRef, input.location, snapshot.tabId);
+      return;
+    }
     useRightPanelStore.getState().openBrowser(input.threadRef, snapshot.tabId);
   });
 }

@@ -31,7 +31,7 @@ import { useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { selectThreadPreviewMiniPlayer, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
-import { useRightPanelStore } from "~/rightPanelStore";
+import { findBrowserTabPanelLocation, useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
 import { subscribePreviewAction } from "./previewActionBus";
@@ -283,7 +283,9 @@ export function PreviewView({
       return;
     }
     usePreviewMiniPlayerStore.getState().open(threadRef, tabId);
-    useRightPanelStore.getState().close(threadRef);
+    const panelStore = useRightPanelStore.getState();
+    const panelLocation = findBrowserTabPanelLocation(panelStore, threadRef, tabId);
+    if (panelLocation) panelStore.closeAt(threadRef, panelLocation);
   }, [miniPlayer?.tabId, tabId, threadRef]);
 
   const handleNativePictureInPicture = useCallback(() => {

@@ -39,6 +39,8 @@ Commands are IDs like `terminal.toggle`, `commandPalette.toggle`, `preview.refre
 
 `terminal.toggle` opens or closes the terminal in the location selected under **Settings** →
 **General** → **Terminal opens in**. Project scripts that open the terminal use the same location.
+The terminal button follows this setting. The separate bottom- and right-panel buttons show or hide
+their panels, and an empty panel opens its surface chooser.
 
 `filePicker.toggle` opens file search for the active project and defaults to `mod+p`.
 `projectSearch.toggle` searches inside the active project's files and defaults to `mod+shift+f`.

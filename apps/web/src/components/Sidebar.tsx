@@ -87,6 +87,12 @@ import { useShortcutModifierState } from "../shortcutModifierState";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
+import {
+  selectActiveBottomPanel,
+  selectActiveRightPanel,
+  useRightPanelStore,
+} from "../rightPanelStore";
+import { resolveTerminalOpenContext } from "../terminalOpenContext";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
@@ -3331,11 +3337,22 @@ export default function Sidebar() {
 
   // Thread jump (cmd+1..9) and prev/next traversal reuse the same commands as
   // v1 — the keybinding layer is shared, only the ordered list differs.
-  const routeTerminalOpen = useTerminalUiStateStore((state) =>
+  const routeTerminalUiOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
+  const routeActiveBottomPanelKind = useRightPanelStore((state) =>
+    selectActiveBottomPanel(state.bottomByThreadKey, routeThreadRef),
+  );
+  const routeActiveRightPanelKind = useRightPanelStore((state) =>
+    selectActiveRightPanel(state.byThreadKey, routeThreadRef),
+  );
+  const routeTerminalOpen = resolveTerminalOpenContext({
+    terminalUiOpen: routeTerminalUiOpen,
+    activeBottomPanelKind: routeActiveBottomPanelKind,
+    activeRightPanelKind: routeActiveRightPanelKind,
+  });
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat) return;

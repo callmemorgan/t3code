@@ -417,7 +417,10 @@ function closeThreadTerminal(
 
   const remainingTerminalIds = normalized.terminalIds.filter((id) => id !== terminalId);
   if (remainingTerminalIds.length === 0) {
-    return createDefaultThreadTerminalUiState();
+    return {
+      ...createDefaultThreadTerminalUiState(),
+      terminalHeight: normalized.terminalHeight,
+    };
   }
 
   const closedTerminalIndex = normalized.terminalIds.indexOf(terminalId);

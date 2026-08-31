@@ -56,6 +56,13 @@ export function resolveBottomTerminalId(input: {
   );
 }
 
+export function resolveBottomTerminalUiOpen(input: {
+  panelTerminalOpen: boolean;
+  terminalIds: ReadonlyArray<string>;
+}): boolean {
+  return input.panelTerminalOpen && input.terminalIds.length > 0;
+}
+
 export type TerminalToggleTarget =
   | { type: "toggle-bottom" }
   | { type: "hide-right" }

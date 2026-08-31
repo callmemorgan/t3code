@@ -27,6 +27,7 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveBottomTerminalId,
+  resolveBottomTerminalUiOpen,
   resolveProjectScriptTerminalTarget,
   resolveTerminalToggleAction,
   resolveBackgroundDraftWorkspaceOptions,
@@ -57,7 +58,17 @@ describe("terminal open-location routing", () => {
   const secondTerminal = terminalSurface("term-2");
   const filesSurface = { id: "files", kind: "files" } as const;
 
-  it("keeps bottom placement on the drawer toggle path", () => {
+  it("only marks the bottom terminal UI open when the visible adapter owns a session", () => {
+    expect(resolveBottomTerminalUiOpen({ panelTerminalOpen: true, terminalIds: ["term-1"] })).toBe(
+      true,
+    );
+    expect(resolveBottomTerminalUiOpen({ panelTerminalOpen: true, terminalIds: [] })).toBe(false);
+    expect(resolveBottomTerminalUiOpen({ panelTerminalOpen: false, terminalIds: ["term-1"] })).toBe(
+      false,
+    );
+  });
+
+  it("keeps bottom placement on the bottom terminal action", () => {
     expect(
       resolveTerminalToggleAction({
         terminalOpenLocation: "bottom",
@@ -136,7 +147,7 @@ describe("project script terminal routing", () => {
   const secondTerminal = terminalSurface("term-2");
   const baseInput = {
     terminalOpenLocation: "right" as const,
-    bottomTerminalId: "drawer-1",
+    bottomTerminalId: "bottom-1",
     rightPanelState: {
       isOpen: true,
       activeSurfaceId: secondTerminal.id,
@@ -147,14 +158,14 @@ describe("project script terminal routing", () => {
     nextTerminalId: "term-3",
   };
 
-  it("does not reuse a right-panel terminal for a bottom script", () => {
+  it("does not reuse a right-panel terminal for a bottom-panel script", () => {
     expect(
       resolveBottomTerminalId({
         activeTerminalId: "panel-1",
-        knownTerminalIds: ["panel-1", "drawer-1"],
+        knownTerminalIds: ["panel-1", "bottom-1"],
         panelTerminalIds: new Set(["panel-1"]),
       }),
-    ).toBe("drawer-1");
+    ).toBe("bottom-1");
     expect(
       resolveBottomTerminalId({
         activeTerminalId: "term-1",
@@ -164,12 +175,12 @@ describe("project script terminal routing", () => {
     ).toBeNull();
   });
 
-  it("preserves bottom terminal reuse and creation", () => {
+  it("preserves bottom-panel terminal reuse and creation", () => {
     expect(
       resolveProjectScriptTerminalTarget({ ...baseInput, terminalOpenLocation: "bottom" }),
     ).toEqual({
       location: "bottom",
-      terminalId: "drawer-1",
+      terminalId: "bottom-1",
       createNew: false,
       surfaceId: null,
     });
@@ -177,7 +188,7 @@ describe("project script terminal routing", () => {
       resolveProjectScriptTerminalTarget({
         ...baseInput,
         terminalOpenLocation: "bottom",
-        runningTerminalIds: ["drawer-1"],
+        runningTerminalIds: ["bottom-1"],
       }),
     ).toEqual({
       location: "bottom",

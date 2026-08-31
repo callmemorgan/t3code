@@ -80,6 +80,12 @@ import { releaseProjectDraftUploads } from "../lib/composerDraftUploads";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isMacPlatform } from "../lib/utils";
 import {
+  selectActiveBottomPanel,
+  selectActiveRightPanel,
+  useRightPanelStore,
+} from "../rightPanelStore";
+import { resolveTerminalOpenContext } from "../terminalOpenContext";
+import {
   readThreadShell,
   useProject,
   useProjects,
@@ -3071,11 +3077,22 @@ export default function LegacySidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
-  const routeTerminalOpen = useTerminalUiStateStore((state) =>
+  const routeTerminalUiOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
       : false,
   );
+  const routeActiveBottomPanelKind = useRightPanelStore((state) =>
+    selectActiveBottomPanel(state.bottomByThreadKey, routeThreadRef),
+  );
+  const routeActiveRightPanelKind = useRightPanelStore((state) =>
+    selectActiveRightPanel(state.byThreadKey, routeThreadRef),
+  );
+  const routeTerminalOpen = resolveTerminalOpenContext({
+    terminalUiOpen: routeTerminalUiOpen,
+    activeBottomPanelKind: routeActiveBottomPanelKind,
+    activeRightPanelKind: routeActiveRightPanelKind,
+  });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),

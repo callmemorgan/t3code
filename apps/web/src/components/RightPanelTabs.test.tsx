@@ -2,8 +2,11 @@ import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/con
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
+import { BOTTOM_PANEL_TERMINAL_SURFACE } from "~/rightPanelStore";
+
 import {
   RightPanelTabs,
+  surfaceLauncherHandlesGlobalShortcut,
   surfaceShortcutActionForKey,
   surfaceShortcutTargetsTypingContext,
   tabMuteMenuItem,
@@ -122,6 +125,102 @@ function renderTabs(
   );
 }
 
+function renderEmptyTabs(options?: {
+  placement?: "right" | "bottom";
+  expandedTitlebarReserve?: boolean;
+}) {
+  return renderToStaticMarkup(
+    <RightPanelTabs
+      mode="inline"
+      {...(options?.placement ? { placement: options.placement } : {})}
+      {...(options?.expandedTitlebarReserve ? { expandedTitlebarReserve: true } : {})}
+      surfaces={[]}
+      activeSurfaceId={null}
+      pendingSurfaceIds={new Set()}
+      previewSessions={{}}
+      desktopByTabId={{}}
+      terminalLabelsById={new Map()}
+      onActivate={() => undefined}
+      onCloseSurface={() => undefined}
+      onCloseOtherSurfaces={() => undefined}
+      onCloseSurfacesToRight={() => undefined}
+      onCloseAllSurfaces={() => undefined}
+      onCopyFilePath={() => undefined}
+      onAddBrowser={() => undefined}
+      onAddTerminal={() => undefined}
+      onAddPullRequest={() => undefined}
+      onAddDiff={() => undefined}
+      onAddFiles={() => undefined}
+      onAddAgents={() => undefined}
+      liveAgentCount={0}
+      browserAvailable
+      terminalAvailable
+      diffAvailable
+      filesAvailable
+      pullRequestAvailable
+      agentsAvailable
+    >
+      <div>content</div>
+    </RightPanelTabs>,
+  );
+}
+
+describe("panel placement", () => {
+  it("keeps the existing right-panel copy and titlebar reserve by default", () => {
+    const html = renderEmptyTabs();
+    expect(html).toContain("Choose what to show in the right panel.");
+    expect(html).toContain("pr-28");
+    expect(html).toContain('data-right-panel-tabbar=""');
+  });
+
+  it("uses bottom-panel copy and can reserve room for the wider control cluster", () => {
+    const html = renderEmptyTabs({ placement: "bottom", expandedTitlebarReserve: true });
+    expect(html).toContain("Choose what to show in the bottom panel.");
+    expect(html).toContain("pr-36");
+    expect(html).toContain('data-bottom-panel-tabbar=""');
+  });
+
+  it("renders the bottom terminal adapter as a real terminal tab", () => {
+    const html = renderToStaticMarkup(
+      <RightPanelTabs
+        mode="embedded"
+        placement="bottom"
+        surfaces={[BOTTOM_PANEL_TERMINAL_SURFACE]}
+        activeSurfaceId={BOTTOM_PANEL_TERMINAL_SURFACE.id}
+        pendingSurfaceIds={new Set()}
+        previewSessions={{}}
+        desktopByTabId={{}}
+        terminalLabelsById={new Map()}
+        onActivate={() => undefined}
+        onCloseSurface={() => undefined}
+        onCloseOtherSurfaces={() => undefined}
+        onCloseSurfacesToRight={() => undefined}
+        onCloseAllSurfaces={() => undefined}
+        onCopyFilePath={() => undefined}
+        onAddBrowser={() => undefined}
+        onAddTerminal={() => undefined}
+        onAddPullRequest={() => undefined}
+        onAddDiff={() => undefined}
+        onAddFiles={() => undefined}
+        onAddAgents={() => undefined}
+        liveAgentCount={0}
+        browserAvailable
+        terminalAvailable
+        diffAvailable
+        filesAvailable
+        pullRequestAvailable
+        agentsAvailable
+      >
+        <div>terminal content</div>
+      </RightPanelTabs>,
+    );
+
+    expect(html).toContain('aria-label="Close Terminal"');
+    expect(html).toContain("lucide-square-terminal");
+    expect(html).toContain("terminal content");
+  });
+});
+
 describe("RightPanelTabs preview favicon", () => {
   it("prefers a live capture and never asks Google about a private hostname", () => {
     const captured = renderTabs(favicon("data:image/png;base64,AAAA", "http://24x.xf.local/"));
@@ -158,6 +257,18 @@ describe("surface shortcuts", () => {
 
   it("does not activate unavailable surfaces", () => {
     expect(surfaceShortcutActionForKey(actions, shortcutEvent("d"))).toBeNull();
+  });
+
+  it("uses focus to choose between two empty-panel launchers", () => {
+    expect(surfaceLauncherHandlesGlobalShortcut({ launcherCount: 1, containsFocus: false })).toBe(
+      true,
+    );
+    expect(surfaceLauncherHandlesGlobalShortcut({ launcherCount: 2, containsFocus: false })).toBe(
+      false,
+    );
+    expect(surfaceLauncherHandlesGlobalShortcut({ launcherCount: 2, containsFocus: true })).toBe(
+      true,
+    );
   });
 
   it("leaves modified, composing, and already-handled key events alone", () => {

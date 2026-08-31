@@ -24,7 +24,7 @@ import {
 
 import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
-import type { RightPanelSurface } from "~/rightPanelStore";
+import type { PanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Button } from "~/components/ui/button";
@@ -42,15 +42,19 @@ import { FaviconImage } from "./preview/PreviewFaviconIcon";
 import { previewBridge } from "./preview/previewBridge";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 
-interface RightPanelTabsProps {
+interface RightPanelTabsProps<Surface extends PanelSurface> {
   mode: PreviewPanelMode;
+  /** Changes panel-specific copy while preserving the same tabs and launcher. */
+  placement?: "right" | "bottom";
   maximized?: boolean;
+  /** Reserves room for the wider title-bar control cluster used by the thread view. */
+  expandedTitlebarReserve?: boolean;
   /** Forwarded to PreviewPanelShell so this surface persists its own width. */
   widthStorageKey?: string;
   /** Forwarded to PreviewPanelShell as the initial width before a user resize. */
   defaultWidth?: number;
   layoutControls?: ReactNode;
-  surfaces: readonly RightPanelSurface[];
+  surfaces: readonly Surface[];
   activeSurfaceId: string | null;
   pendingSurfaceIds: ReadonlySet<string>;
   previewSessions: Readonly<Record<string, PreviewSessionSnapshot>>;
@@ -62,10 +66,10 @@ interface RightPanelTabsProps {
    */
   previewRuntimeTabId?: ((tabId: string) => string) | undefined;
   terminalLabelsById: ReadonlyMap<string, string>;
-  onActivate: (surface: RightPanelSurface) => void;
-  onCloseSurface: (surface: RightPanelSurface) => void;
-  onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
-  onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
+  onActivate: (surface: Surface) => void;
+  onCloseSurface: (surface: Surface) => void;
+  onCloseOtherSurfaces: (surface: Surface) => void;
+  onCloseSurfacesToRight: (surface: Surface) => void;
   onCloseAllSurfaces: () => void;
   onCopyFilePath: (relativePath: string) => void;
   onAddBrowser: () => void;
@@ -138,7 +142,7 @@ type TabContextMenuAction =
  * "new browser tab" placeholder, and the web build where no desktop tab exists.
  */
 function previewTabIdOf(
-  surface: RightPanelSurface,
+  surface: PanelSurface,
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
 ): string | null {
   if (surface.kind !== "preview" || !surface.resourceId) return null;
@@ -207,6 +211,14 @@ export function surfaceShortcutTargetsTypingContext(
   );
 }
 
+/** Avoids dispatching one launcher shortcut to two simultaneously empty panels. */
+export function surfaceLauncherHandlesGlobalShortcut(input: {
+  launcherCount: number;
+  containsFocus: boolean;
+}): boolean {
+  return input.launcherCount <= 1 || input.containsFocus;
+}
+
 function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement }) {
   return (
     <Tooltip>
@@ -239,13 +251,14 @@ function SurfaceMenuItem(props: {
 }
 
 /**
- * Card launcher shown when the right panel has no surfaces. Keyboard-first
+ * Card launcher shown when a panel has no surfaces. Keyboard-first
  * without palette chrome: a surface's letter opens it directly from anywhere
  * outside a typing context, and arrows plus Enter work while the launcher is
  * focused. The highlight only appears on hover or arrow use. Unavailable
  * surfaces stay visible with a one-line reason.
  */
-function RightPanelEmptyState(props: {
+function PanelEmptyState(props: {
+  placement: "right" | "bottom";
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
@@ -262,6 +275,7 @@ function RightPanelEmptyState(props: {
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
   const [highlight, setHighlight] = useState(-1);
+  const launcherRef = useRef<HTMLDivElement | null>(null);
 
   const actions = [
     {
@@ -345,6 +359,14 @@ function RightPanelEmptyState(props: {
       const action = surfaceShortcutActionForKey(shortcutActionsRef.current, event);
       if (!action) return;
       if (document.querySelector(LAUNCHER_SHORTCUT_BLOCKING_LAYERS)) return;
+      if (
+        !surfaceLauncherHandlesGlobalShortcut({
+          launcherCount: document.querySelectorAll("[data-surface-launcher]").length,
+          containsFocus: launcherRef.current?.contains(document.activeElement) ?? false,
+        })
+      ) {
+        return;
+      }
       const target = event.target;
       if (target instanceof Element && surfaceShortcutTargetsTypingContext(target)) return;
       event.preventDefault();
@@ -386,6 +408,7 @@ function RightPanelEmptyState(props: {
   // Stable identity so React only runs this callback ref on mount/unmount;
   // an inline arrow would re-attach and re-focus on every render.
   const focusOnMount = useCallback((node: HTMLDivElement | null) => {
+    launcherRef.current = node;
     node?.focus();
   }, []);
 
@@ -418,23 +441,41 @@ function RightPanelEmptyState(props: {
       ref={focusOnMount}
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      aria-label="Open a surface"
+      aria-label={`Open a surface in the ${props.placement} panel`}
+      data-surface-launcher={props.placement}
       data-surface-launcher-keys={availableActions.map((action) => action.shortcut).join("")}
       className={cn(
-        "flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 pt-6 outline-none",
-        // The panel topbar sits above this container; matching bottom padding
-        // keeps the cards centered against the full panel, not the leftover.
-        "pb-[calc(var(--workspace-topbar-height)+--spacing(6))]",
+        "flex min-h-0 flex-1 justify-center overflow-y-auto outline-none",
+        props.placement === "right"
+          ? [
+              "items-center px-6 pt-6",
+              // The panel topbar sits above this container; matching bottom
+              // padding keeps the cards centered against the full panel.
+              "pb-[calc(var(--workspace-topbar-height)+--spacing(6))]",
+            ]
+          : "items-start px-4 py-4",
       )}
     >
-      <div className="relative w-full max-w-lg">
-        <div className="absolute inset-x-0 bottom-full mb-5 text-center">
+      <div
+        className={cn("relative w-full", props.placement === "right" ? "max-w-lg" : "max-w-4xl")}
+      >
+        <div
+          className={cn(
+            "text-center",
+            props.placement === "right" ? "absolute inset-x-0 bottom-full mb-5" : "mb-3",
+          )}
+        >
           <h3 className="font-medium text-foreground text-sm">Open a surface</h3>
           <p className="mt-1 text-muted-foreground text-xs">
-            Choose what to show in the right panel.
+            Choose what to show in the {props.placement} panel.
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div
+          className={cn(
+            "grid gap-2",
+            props.placement === "right" ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3",
+          )}
+        >
           {actions.map((action) =>
             action.available ? (
               <button
@@ -448,7 +489,8 @@ function RightPanelEmptyState(props: {
                   )
                 }
                 className={cn(
-                  "relative flex w-full cursor-pointer flex-col items-start p-4 text-left transition hover:border-border hover:bg-accent/60",
+                  "relative flex w-full cursor-pointer flex-col items-start text-left transition hover:border-border hover:bg-accent/60",
+                  props.placement === "right" ? "p-4" : "p-3",
                   cardShellClass,
                   isHighlighted(action) && highlightedCardClass,
                 )}
@@ -466,7 +508,8 @@ function RightPanelEmptyState(props: {
               <div
                 key={action.label}
                 className={cn(
-                  "relative flex w-full flex-col items-start p-4 opacity-40",
+                  "relative flex w-full flex-col items-start opacity-40",
+                  props.placement === "right" ? "p-4" : "p-3",
                   cardShellClass,
                 )}
               >
@@ -488,7 +531,7 @@ function RightPanelEmptyState(props: {
 }
 
 function surfaceTitle(
-  surface: RightPanelSurface,
+  surface: PanelSurface,
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>,
   terminalLabelsById: ReadonlyMap<string, string>,
 ): string {
@@ -504,6 +547,8 @@ function surfaceTitle(
         terminalLabelsById.get(surface.activeTerminalId) ??
         getTerminalLabel(surface.activeTerminalId)
       );
+    case "terminal-adapter":
+      return "Terminal";
     case "pull-request":
       return `#${surface.number}`;
     case "agents":
@@ -547,7 +592,7 @@ function SurfaceIcon({
   theme,
   pullRequestStatuses,
 }: {
-  surface: RightPanelSurface;
+  surface: PanelSurface;
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>;
   desktopByTabId: Readonly<Record<string, DesktopPreviewOverlay>>;
   theme: "light" | "dark";
@@ -576,6 +621,7 @@ function SurfaceIcon({
         />
       );
     case "terminal":
+    case "terminal-adapter":
       return <TerminalSquare className="size-3 shrink-0" />;
     case "pull-request": {
       const status = pullRequestStatuses?.[surface.id] ?? null;
@@ -596,7 +642,8 @@ function SurfaceIcon({
   }
 }
 
-export function RightPanelTabs(props: RightPanelTabsProps) {
+export function RightPanelTabs<Surface extends PanelSurface>(props: RightPanelTabsProps<Surface>) {
+  const placement = props.placement ?? "right";
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
@@ -663,7 +710,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   };
 
   const handleTabContextMenu = useCallback(
-    async (event: ReactMouseEvent, surface: RightPanelSurface) => {
+    async (event: ReactMouseEvent, surface: Surface) => {
       event.preventDefault();
       event.stopPropagation();
 
@@ -755,7 +802,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     event.preventDefault();
   }, []);
   const handleTabAuxClick = useCallback(
-    (event: ReactMouseEvent, surface: RightPanelSurface) => {
+    (event: ReactMouseEvent, surface: Surface) => {
       if (event.button !== 1) return;
       event.preventDefault();
       event.stopPropagation();
@@ -782,18 +829,29 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           // The sheet overlays from the viewport top, so its tab bar keeps
           // the titlebar's height: a compact row re-centers the layout
           // controls a few pixels higher and the cluster jumps on open.
-          props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
-          ownsDesktopTitleBar && "wco:pr-[calc(var(--workspace-native-controls-inset)+6rem)]",
+          props.mode === "inline" && !props.layoutControls
+            ? props.expandedTitlebarReserve
+              ? "pr-36"
+              : "pr-28"
+            : "pr-3",
+          ownsDesktopTitleBar &&
+            (props.expandedTitlebarReserve
+              ? "wco:pr-[calc(var(--workspace-native-controls-inset)+8rem)]"
+              : "wco:pr-[calc(var(--workspace-native-controls-inset)+6rem)]"),
           props.mode === "inline" && props.maximized && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
-        data-right-panel-tabbar
+        data-panel-tabbar={placement}
+        data-right-panel-tabbar={placement === "right" ? "" : undefined}
+        data-bottom-panel-tabbar={placement === "bottom" ? "" : undefined}
       >
         <ScrollArea
           ref={tabListRef}
           hideScrollbars
           scrollFade
           className={cn("min-w-0 flex-1 rounded-none", ownsDesktopTitleBar && "drag-region")}
-          data-right-panel-tab-list
+          data-panel-tab-list={placement}
+          data-right-panel-tab-list={placement === "right" ? "" : undefined}
+          data-bottom-panel-tab-list={placement === "bottom" ? "" : undefined}
         >
           <div className="flex h-full w-max min-w-full items-center gap-1">
             {props.surfaces.map((surface) => {
@@ -929,9 +987,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         </ScrollArea>
         {props.layoutControls}
       </div>
-      <div className="flex min-h-0 flex-1 flex-col" data-right-panel-surface-content>
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        data-panel-surface-content={placement}
+        data-right-panel-surface-content={placement === "right" ? "" : undefined}
+        data-bottom-panel-surface-content={placement === "bottom" ? "" : undefined}
+      >
         {props.activeSurfaceId === null ? (
-          <RightPanelEmptyState
+          <PanelEmptyState
+            placement={placement}
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}

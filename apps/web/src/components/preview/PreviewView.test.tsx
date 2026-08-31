@@ -21,7 +21,9 @@ const mocks = vi.hoisted(() => ({
   miniPlayerTabId: null as string | null,
   openMiniPlayer: vi.fn(),
   closeMiniPlayer: vi.fn(),
-  closeRightPanel: vi.fn(),
+  browserTabPanelLocation: "right" as "right" | "bottom" | null,
+  findBrowserTabPanelLocation: vi.fn(),
+  closePanelAt: vi.fn(),
   openPictureInPicture: vi.fn(async (_tabId: string): Promise<void> => undefined),
   closePictureInPicture: vi.fn(async (_tabId: string): Promise<void> => undefined),
   pickElement: vi.fn(),
@@ -189,8 +191,9 @@ vi.mock("~/previewMiniPlayerStore", () => {
 });
 
 vi.mock("~/rightPanelStore", () => ({
+  findBrowserTabPanelLocation: mocks.findBrowserTabPanelLocation,
   useRightPanelStore: {
-    getState: () => ({ close: mocks.closeRightPanel }),
+    getState: () => ({ closeAt: mocks.closePanelAt }),
   },
 }));
 
@@ -332,7 +335,10 @@ describe("PreviewView navigation", () => {
     mocks.miniPlayerTabId = null;
     mocks.openMiniPlayer.mockClear();
     mocks.closeMiniPlayer.mockClear();
-    mocks.closeRightPanel.mockClear();
+    mocks.browserTabPanelLocation = "right";
+    mocks.findBrowserTabPanelLocation.mockReset();
+    mocks.findBrowserTabPanelLocation.mockImplementation(() => mocks.browserTabPanelLocation);
+    mocks.closePanelAt.mockClear();
     mocks.openPictureInPicture.mockClear();
     mocks.closePictureInPicture.mockClear();
     mocks.pickElement.mockReset();
@@ -479,13 +485,32 @@ describe("PreviewView navigation", () => {
     expect(mocks.pictureInPicturePressed).toBe(false);
     mocks.togglePictureInPicture?.();
     expect(mocks.openMiniPlayer).toHaveBeenCalledWith(props.threadRef, "tab-1");
-    expect(mocks.closeRightPanel).toHaveBeenCalledWith(props.threadRef);
+    expect(mocks.findBrowserTabPanelLocation).toHaveBeenCalledWith(
+      expect.anything(),
+      props.threadRef,
+      "tab-1",
+    );
+    expect(mocks.closePanelAt).toHaveBeenCalledWith(props.threadRef, "right");
 
     mocks.miniPlayerTabId = "tab-1";
     renderToStaticMarkup(<PreviewView {...props} />);
     expect(mocks.pictureInPicturePressed).toBe(true);
     mocks.togglePictureInPicture?.();
     expect(mocks.closeMiniPlayer).toHaveBeenCalledWith(props.threadRef);
+  });
+
+  it("closes the bottom panel when its preview moves into picture-in-picture", () => {
+    mocks.browserTabPanelLocation = "bottom";
+    const props = {
+      threadRef: TEST_THREAD_REF,
+      tabId: "tab-1",
+      visible: true,
+    } as const;
+
+    renderToStaticMarkup(<PreviewView {...props} />);
+    mocks.togglePictureInPicture?.();
+
+    expect(mocks.closePanelAt).toHaveBeenCalledWith(props.threadRef, "bottom");
   });
 
   it("keeps the native preview window as a secondary action", async () => {

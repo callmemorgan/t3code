@@ -212,7 +212,7 @@ describe("terminalUiStateStore actions", () => {
     });
   });
 
-  it("resets to default and clears persisted entry when closing the last terminal", () => {
+  it("clears the persisted entry when closing the last terminal at the default height", () => {
     const store = useTerminalUiStateStore.getState();
     store.newTerminal(THREAD_REF, "terminal-only");
     store.closeTerminal(THREAD_REF, "terminal-only");
@@ -226,6 +226,27 @@ describe("terminalUiStateStore actions", () => {
         THREAD_REF,
       ).terminalIds,
     ).toEqual([]);
+  });
+
+  it("keeps the bottom panel height after closing the last terminal", () => {
+    const store = useTerminalUiStateStore.getState();
+    store.setTerminalHeight(THREAD_REF, 420);
+    store.newTerminal(THREAD_REF, "terminal-only");
+    store.closeTerminal(THREAD_REF, "terminal-only");
+
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      ),
+    ).toEqual({
+      terminalOpen: false,
+      terminalHeight: 420,
+      terminalIds: [],
+      activeTerminalId: "",
+      terminalGroups: [],
+      activeTerminalGroupId: "",
+    });
   });
 
   it("keeps a valid active terminal after closing an active split terminal", () => {

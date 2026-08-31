@@ -986,6 +986,8 @@ export function TerminalViewport({
 
 interface ThreadTerminalDrawerProps {
   mode?: "drawer" | "panel";
+  /** Panel layout can still belong to the bottom terminal for focus routing. */
+  owner?: "drawer" | "right-panel";
   threadRef: ScopedThreadRef;
   threadId: ThreadId;
   cwd: string;
@@ -1047,6 +1049,7 @@ function TerminalActionButton({ label, className, onClick, children }: TerminalA
 
 export default function ThreadTerminalDrawer({
   mode = "drawer",
+  owner,
   threadRef,
   threadId,
   cwd,
@@ -1075,6 +1078,7 @@ export default function ThreadTerminalDrawer({
   terminalLaunchLocationsById,
 }: ThreadTerminalDrawerProps) {
   const isPanel = mode === "panel";
+  const terminalOwner = owner ?? (isPanel ? "right-panel" : "drawer");
   const [advancedTypography] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
     false,
@@ -1087,6 +1091,7 @@ export default function ThreadTerminalDrawer({
   }));
   const drawerHeight =
     drawerHeightState.threadId === threadId ? drawerHeightState.height : controlledDrawerHeight;
+  const terminalViewportHeight = isPanel ? controlledDrawerHeight : drawerHeight;
   const setDrawerHeight = useCallback(
     (update: SetStateAction<number>) => {
       setDrawerHeightState((current) => {
@@ -1293,12 +1298,16 @@ export default function ThreadTerminalDrawer({
     drawerHeightRef.current = drawerHeight;
   }, [drawerHeight]);
 
-  const syncHeight = useCallback((nextHeight: number) => {
-    const clampedHeight = clampDrawerHeight(nextHeight);
-    if (lastSyncedHeightRef.current === clampedHeight) return;
-    lastSyncedHeightRef.current = clampedHeight;
-    onHeightChangeRef.current(clampedHeight);
-  }, []);
+  const syncHeight = useCallback(
+    (nextHeight: number) => {
+      if (isPanel) return;
+      const clampedHeight = clampDrawerHeight(nextHeight);
+      if (lastSyncedHeightRef.current === clampedHeight) return;
+      lastSyncedHeightRef.current = clampedHeight;
+      onHeightChangeRef.current(clampedHeight);
+    },
+    [isPanel],
+  );
 
   useEffect(() => {
     lastSyncedHeightRef.current = controlledDrawerHeight;
@@ -1390,7 +1399,7 @@ export default function ThreadTerminalDrawer({
   if (normalizedTerminalIds.length === 0) {
     return (
       <aside
-        data-terminal-owner={isPanel ? "right-panel" : "drawer"}
+        data-terminal-owner={terminalOwner}
         className={cn(
           "thread-terminal-drawer relative flex min-w-0 flex-col overflow-hidden bg-background",
           isPanel ? "h-full flex-1" : "shrink-0 border-t border-border/80",
@@ -1420,7 +1429,7 @@ export default function ThreadTerminalDrawer({
 
   return (
     <aside
-      data-terminal-owner={isPanel ? "right-panel" : "drawer"}
+      data-terminal-owner={terminalOwner}
       className={cn(
         "thread-terminal-drawer relative flex min-w-0 flex-col overflow-hidden bg-background",
         isPanel ? "h-full flex-1" : "shrink-0 border-t border-border/80",
@@ -1543,7 +1552,7 @@ export default function ThreadTerminalDrawer({
                           focusRequestId={focusRequestId}
                           autoFocus={terminalId === resolvedActiveTerminalId}
                           resizeEpoch={resizeEpoch}
-                          drawerHeight={drawerHeight}
+                          drawerHeight={terminalViewportHeight}
                           keybindings={keybindings}
                         />
                       </div>
@@ -1572,7 +1581,7 @@ export default function ThreadTerminalDrawer({
                   focusRequestId={focusRequestId}
                   autoFocus
                   resizeEpoch={resizeEpoch}
-                  drawerHeight={drawerHeight}
+                  drawerHeight={terminalViewportHeight}
                   keybindings={keybindings}
                 />
               </div>

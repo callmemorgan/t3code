@@ -1294,15 +1294,19 @@ function PullRequestsRouteView() {
   const panelToggleControls = (
     <PanelLayoutControls
       showTerminalControl={false}
+      showBottomPanelControl={false}
       terminalAvailable={false}
       terminalOpen={false}
       terminalShortcutLabel={null}
+      bottomPanelAvailable={false}
+      bottomPanelOpen={false}
       rightPanelAvailable={rightPanelAvailable}
       rightPanelOpen={rightPanelState.isOpen}
       rightPanelShortcutLabel={null}
       rightPanelUnavailableLabel="Select a pull request first"
       liveAgentCount={0}
       onToggleTerminal={() => undefined}
+      onToggleBottomPanel={() => undefined}
       onToggleRightPanel={toggleRightPanel}
     />
   );
