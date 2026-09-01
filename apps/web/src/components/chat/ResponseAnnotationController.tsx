@@ -31,7 +31,6 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const EMPTY_RESPONSE_ANNOTATIONS: ReadonlyArray<ResponseAnnotation> = [];
-const EMPTY_RESPONSE_ANNOTATION_MARKERS: ReadonlyArray<ResponseAnnotationSourceMarker> = [];
 
 export interface ResponseAnnotationSelection {
   readonly sourceMessageId: MessageId;
@@ -66,8 +65,6 @@ export interface ResponseAnnotationSourceMarker {
 export interface ResponseAnnotationTimelineControllerProps {
   readonly supported?: boolean;
   readonly draftAnnotations?: ReadonlyArray<ResponseAnnotation>;
-  /** Annotations already attached to loaded user messages; these are read-only. */
-  readonly sentAnnotations?: ReadonlyArray<ResponseAnnotationSourceMarker>;
   readonly onCreateResponseAnnotation?:
     | ((annotation: ResponseAnnotation) => boolean | void)
     | undefined;
@@ -383,11 +380,15 @@ export function ResponseAnnotationSourceMarkers({
       return;
     }
     const sourceRect = source.getBoundingClientRect();
+    // One index for the whole pass: building it walks every text node under the
+    // markdown root, so doing it per marker scales with (DOM size x markers).
+    const index = buildRenderedTextIndex(markdownRoot);
     const next = markers.flatMap(({ annotation }) => {
       const range = domRangeForResponseAnnotation(
         markdownRoot,
         annotation.selectedText,
         annotation.sourceRange,
+        index,
       );
       if (!range) return [];
       const rects = rangeClientRects(range);
@@ -671,7 +672,6 @@ function HistoricalResponseAnnotationJump({
 export function ResponseAnnotationTimelineController({
   supported = false,
   draftAnnotations = EMPTY_RESPONSE_ANNOTATIONS,
-  sentAnnotations = EMPTY_RESPONSE_ANNOTATION_MARKERS,
   onCreateResponseAnnotation,
   onUpdateResponseAnnotation,
   onDeleteResponseAnnotation,
@@ -775,30 +775,17 @@ export function ResponseAnnotationTimelineController({
   );
   const sourceMarkersByMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, ResponseAnnotationSourceMarker[]>();
-    const draftIds = new Set<ResponseAnnotationId>();
 
     for (const annotation of effectiveAnnotations) {
       const number = numberByAnnotationId.get(annotation.id);
       if (number === undefined) continue;
-      draftIds.add(annotation.id);
       const existing = byMessageId.get(annotation.sourceMessageId) ?? [];
       existing.push({ annotation, number, editable: true });
       byMessageId.set(annotation.sourceMessageId, existing);
     }
 
-    // A just-sent annotation can briefly be present in both the composer
-    // draft and the loaded user message. Keep the draft marker in that race;
-    // it remains editable until the draft is acknowledged and then the
-    // read-only marker takes over without duplicating the bubble.
-    for (const marker of sentAnnotations) {
-      if (draftIds.has(marker.annotation.id)) continue;
-      const existing = byMessageId.get(marker.annotation.sourceMessageId) ?? [];
-      existing.push(marker);
-      byMessageId.set(marker.annotation.sourceMessageId, existing);
-    }
-
     return byMessageId;
-  }, [effectiveAnnotations, numberByAnnotationId, sentAnnotations]);
+  }, [effectiveAnnotations, numberByAnnotationId]);
 
   const readTextSelection = useCallback(() => {
     if (!supported || editor !== null) return;

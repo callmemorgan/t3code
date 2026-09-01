@@ -29,6 +29,7 @@ const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
 import { getProjectFaviconCacheKey } from "@t3tools/shared/projectFavicon";
+import { containsResponseAnnotationDirective } from "@t3tools/shared/responseAnnotations";
 import {
   createContext,
   Fragment,
@@ -182,7 +183,6 @@ import {
   ResponseAnnotationTimelineController,
   useResponseAnnotationTimelineContext,
   type ResponseAnnotationNavigationRequest,
-  type ResponseAnnotationSourceMarker,
 } from "./ResponseAnnotationController";
 import { deriveResponseAnnotationTurnContext } from "./responseAnnotationTimeline";
 
@@ -584,18 +584,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => deriveResponseAnnotationTurnContext(timelineEntries),
     [timelineEntries],
   );
-  const sentResponseAnnotationMarkers = useMemo<ReadonlyArray<ResponseAnnotationSourceMarker>>(
-    () =>
-      timelineEntries.flatMap((entry) => {
-        if (entry.kind !== "message" || entry.message.role !== "user") return [];
-        return (entry.message.responseAnnotations ?? []).map((annotation, index) => ({
-          annotation,
-          number: index + 1,
-          editable: false,
-        }));
-      }),
-    [timelineEntries],
-  );
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
@@ -844,7 +832,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           <ResponseAnnotationTimelineController
             supported={responseAnnotationsSupported}
             draftAnnotations={responseAnnotations}
-            sentAnnotations={sentResponseAnnotationMarkers}
             onCreateResponseAnnotation={onCreateResponseAnnotation}
             onUpdateResponseAnnotation={onUpdateResponseAnnotation}
             onDeleteResponseAnnotation={onDeleteResponseAnnotation}
@@ -1599,7 +1586,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
     ? ctx.responseAnnotationsByTurnId.get(row.message.turnId)
     : undefined;
   const responseAnnotationsForMarkdown =
-    (responseAnnotations?.length ?? 0) > 0 || messageText.includes(':codex-annotation{index="')
+    (responseAnnotations?.length ?? 0) > 0 || containsResponseAnnotationDirective(messageText)
       ? (responseAnnotations ?? EMPTY_RESPONSE_ANNOTATIONS)
       : undefined;
 

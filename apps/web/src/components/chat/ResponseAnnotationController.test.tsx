@@ -14,7 +14,6 @@ import {
   ResponseAnnotationSourceMarkers,
   ResponseAnnotationSourceRoot,
   ResponseAnnotationTimelineController,
-  type ResponseAnnotationSourceMarker,
 } from "./ResponseAnnotationController";
 
 const sourceMessageId = MessageId.make("assistant-source");
@@ -210,29 +209,6 @@ describe("response annotation timeline controller", () => {
     expect(markup).toContain('aria-label="Edit Annotation 2"');
     expect(markup).toContain("pt-6 pr-6");
     expect(markup.match(/bg-blue-500/g)?.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("keeps sent bubbles read-only and preserves each originating message number", () => {
-    const first = annotation("sent-first", "first");
-    const second = annotation("sent-second", "second");
-    const markers: ReadonlyArray<ResponseAnnotationSourceMarker> = [
-      { annotation: first, number: 1, editable: false },
-      { annotation: second, number: 1, editable: false },
-    ];
-    const markup = renderToStaticMarkup(
-      <ResponseAnnotationTimelineController sentAnnotations={markers}>
-        <ResponseAnnotationSourceRoot messageId={sourceMessageId} streaming={false}>
-          <div className="chat-markdown">first second</div>
-        </ResponseAnnotationSourceRoot>
-      </ResponseAnnotationTimelineController>,
-    );
-
-    expect(markup.match(/data-response-annotation-marker="/g)).toHaveLength(2);
-    expect(markup.match(/data-response-annotation-marker-editable="false"/g)).toHaveLength(2);
-    expect(markup.match(/aria-label="Annotation 1:/g)).toHaveLength(2);
-    expect(markup).toContain("first");
-    expect(markup).toContain("second");
-    expect(markup).not.toContain("Delete annotation");
   });
 
   it("keeps draft bubbles after a comment save and renumbers after deletion", () => {

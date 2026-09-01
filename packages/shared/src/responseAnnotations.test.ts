@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  formatCodexAnnotationDirective,
   formatResponseAnnotationDirective,
   formatResponseAnnotationPrompt,
   parseResponseAnnotationDirective,
@@ -86,7 +85,7 @@ describe("response annotation directives", () => {
 
 describe("response annotation provider formatting", () => {
   it("formats the native Codex directive with a one-based index", () => {
-    expect(formatCodexAnnotationDirective(3)).toBe(':codex-annotation{index="3"}');
+    expect(formatResponseAnnotationDirective(3)).toBe(':codex-annotation{index="3"}');
   });
 
   it("leaves ordinary requests unchanged when there are no annotations", () => {

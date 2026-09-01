@@ -4,17 +4,12 @@ import { Pressable, ScrollView, View } from "react-native";
 
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
-import { useUniwindTheme } from "../../lib/useUniwindTheme";
 
 export const ResponseAnnotationSummary = memo(function ResponseAnnotationSummary(props: {
   readonly annotations: ReadonlyArray<ResponseAnnotation>;
   readonly onSelect: (annotation: ResponseAnnotation, index: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const theme = useUniwindTheme();
-  const iconColor = theme["--color-icon-subtle"];
-  const borderColor = theme["--color-border"];
-  const subtleBackground = theme["--color-subtle"];
 
   if (props.annotations.length === 0) {
     return null;
@@ -30,21 +25,25 @@ export const ResponseAnnotationSummary = memo(function ResponseAnnotationSummary
         accessibilityRole="button"
         accessibilityLabel={`${label}. ${expanded ? "Hide" : "Show"} annotation list`}
         accessibilityState={{ expanded }}
-        className="flex-row items-center gap-1 rounded-full border px-2.5 py-1.5"
-        style={{ borderColor, backgroundColor: subtleBackground }}
+        className="flex-row items-center gap-1 rounded-full border border-border bg-subtle px-2.5 py-1.5"
         onPress={() => setExpanded((current) => !current)}
       >
-        <SymbolView name="text.bubble" size={13} tintColor={iconColor} type="monochrome" />
+        <SymbolView
+          name="text.bubble"
+          size={13}
+          tintColorClassName="accent-icon-subtle"
+          type="monochrome"
+        />
         <Text className="font-t3-medium text-xs text-foreground-secondary">{label}</Text>
         <SymbolView
           name={expanded ? "chevron.down" : "chevron.right"}
           size={12}
-          tintColor={iconColor}
+          tintColorClassName="accent-icon-subtle"
           type="monochrome"
         />
       </Pressable>
       {expanded ? (
-        <View className="mt-1 w-full rounded-xl border p-1" style={{ borderColor }}>
+        <View className="mt-1 w-full rounded-xl border border-border p-1">
           <ScrollView nestedScrollEnabled className="max-h-72">
             <View className="gap-1">
               {props.annotations.map((annotation, index) => {

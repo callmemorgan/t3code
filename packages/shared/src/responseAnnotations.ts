@@ -16,6 +16,15 @@ export type ResponseAnnotationDirectivePart =
       readonly directive: Omit<ResponseAnnotationDirective, "raw">;
     };
 
+/**
+ * Cheap check for whether a message body is worth running the directive
+ * renderer over. Callers use this instead of spelling the token themselves, so
+ * changing the directive syntax stays a one-file edit.
+ */
+export function containsResponseAnnotationDirective(value: string): boolean {
+  return value.includes(DIRECTIVE_START);
+}
+
 export function parseResponseAnnotationDirective(
   value: string,
 ): Omit<ResponseAnnotationDirective, "raw"> | null {
@@ -272,6 +281,3 @@ export function formatResponseAnnotationPrompt(
     messageText ?? "",
   ].join("\n");
 }
-
-/** Backwards-compatible name used by the server's annotation tests. */
-export const formatCodexAnnotationDirective = formatResponseAnnotationDirective;

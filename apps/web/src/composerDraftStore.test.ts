@@ -13,7 +13,6 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  MessageId,
   ResponseAnnotationId,
   ThreadId,
   type ModelSelection,
@@ -2571,8 +2570,7 @@ describe("composerDraftStore response annotations", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
   });
 
-  it("does not move source-bound annotations when moving prompt text", () => {
-    const destination = DraftId.make("draft-response-destination");
+  it("keeps source-bound annotations when clearing stash-transferable content", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(threadRef, "follow up");
     store.addResponseAnnotation(
@@ -2580,11 +2578,10 @@ describe("composerDraftStore response annotations", () => {
       makeResponseAnnotation({ id: "response-annotation-source-bound" }),
     );
 
-    store.moveComposerPromptAndImages(threadRef, destination);
+    store.clearComposerPromptAndImages(threadRef);
 
-    expect(draftByKey(destination)?.prompt).toBe("follow up");
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("");
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.responseAnnotations).toHaveLength(1);
-    expect(draftByKey(destination)?.responseAnnotations).toEqual([]);
   });
 
   it("restores a failed send only if no newer content was entered", () => {

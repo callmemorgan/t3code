@@ -350,13 +350,19 @@ export function responseAnnotationSourceRangeFromDomRange(
   return buildResponseAnnotationSourceRange(index.text, start, end);
 }
 
-/** Find the DOM Range represented by a persisted selector. */
+/**
+ * Find the DOM Range represented by a persisted selector.
+ *
+ * Callers resolving several annotations against the same root should build the
+ * index once with `buildRenderedTextIndex` and pass it in; the walk is over the
+ * whole subtree, so rebuilding it per annotation costs (DOM size x annotations).
+ */
 export function domRangeForResponseAnnotation(
   root: Node,
   selectedText: string,
   selector: Pick<ResponseAnnotationSourceRange, "start" | "end" | "prefix" | "suffix">,
+  index: RenderedTextIndex = buildRenderedTextIndex(root),
 ): Range | null {
-  const index = buildRenderedTextIndex(root);
   const resolved = resolveResponseAnnotationSourceRangeWithText(index.text, selectedText, selector);
   if (!resolved) return null;
   const range = root.ownerDocument?.createRange();

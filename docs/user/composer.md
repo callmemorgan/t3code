@@ -216,7 +216,7 @@ When a draft has annotations, the composer shows one **N annotations** chip. Ope
 selection or delete one. T3 Code renumbers the remaining draft annotations after a deletion. Sending
 preserves their order. You can send annotations with a normal prompt or send a message that contains
 annotations without typed text. Sent annotations appear in the user message summary and cannot be
-edited.
+edited. Their source markers disappear after sending.
 
 When the agent refers to a selection, T3 Code displays a blue **Annotation N** link in its response.
 Hover or focus the link to see the selected text and comment. Activate it to open the source message,

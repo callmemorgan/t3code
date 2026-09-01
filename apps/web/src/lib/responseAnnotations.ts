@@ -8,10 +8,8 @@ import {
   type ResponseAnnotation,
 } from "@t3tools/contracts";
 import {
-  formatResponseAnnotationDirective,
   parseResponseAnnotationDirective,
   splitResponseAnnotationDirectives,
-  type ResponseAnnotationDirectivePart,
 } from "@t3tools/shared/responseAnnotations";
 import { randomUUID } from "./utils";
 
@@ -41,22 +39,6 @@ export interface ParsedCodexResponseAnnotationDirective {
   readonly index: number | null;
 }
 
-/**
- * Parse one complete native Codex annotation directive.
- *
- * The exact-match requirement is important: this function is also used to
- * distinguish malformed directives from valid ones while rendering Markdown.
- */
-export function parseCodexResponseAnnotationDirective(
-  value: string,
-): ParsedCodexResponseAnnotationDirective | null {
-  return parseResponseAnnotationDirective(value);
-}
-
-export function formatCodexResponseAnnotationDirective(index: number): string {
-  return formatResponseAnnotationDirective(index);
-}
-
 export function codexResponseAnnotationHref(rawIndex: string): string {
   return `${CODEX_RESPONSE_ANNOTATION_HREF_PREFIX}${encodeURIComponent(rawIndex)}`;
 }
@@ -73,7 +55,7 @@ export function parseCodexResponseAnnotationHref(
     return null;
   }
   if (!/^[0-9]+$/.test(rawIndex)) return null;
-  return parseCodexResponseAnnotationDirective(`:codex-annotation{index="${rawIndex}"}`);
+  return parseResponseAnnotationDirective(`:codex-annotation{index="${rawIndex}"}`);
 }
 
 /** Resolve a one-based provider index against the initiating user message. */
@@ -100,7 +82,7 @@ export function remarkCodexResponseAnnotations() {
       const nextChildren: MarkdownAnnotationAstNode[] = [];
       for (const child of node.children) {
         if (!insideLink && child.type === "text" && typeof child.value === "string") {
-          const parts = splitCodexResponseAnnotationText(child.value);
+          const parts = splitResponseAnnotationDirectives(child.value);
           if (parts.length > 1 || parts[0]?.kind === "directive") {
             const escapedDirectiveOrdinals = findEscapedDirectiveOrdinals(
               child.value,
@@ -216,12 +198,6 @@ type MarkdownAnnotationAstNode = {
   };
   children?: MarkdownAnnotationAstNode[];
 };
-
-export function splitCodexResponseAnnotationText(
-  value: string,
-): ReadonlyArray<ResponseAnnotationDirectivePart> {
-  return splitResponseAnnotationDirectives(value);
-}
 
 /**
  * Normalize user-created or persisted annotation data before it enters the

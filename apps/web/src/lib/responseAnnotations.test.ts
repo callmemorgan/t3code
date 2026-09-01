@@ -2,12 +2,15 @@ import { MessageId, ResponseAnnotationId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  formatCodexResponseAnnotationDirective,
+  formatResponseAnnotationDirective,
+  parseResponseAnnotationDirective,
+  splitResponseAnnotationDirectives,
+} from "@t3tools/shared/responseAnnotations";
+
+import {
   normalizeResponseAnnotations,
-  parseCodexResponseAnnotationDirective,
   remarkCodexResponseAnnotations,
   resolveCodexResponseAnnotation,
-  splitCodexResponseAnnotationText,
 } from "./responseAnnotations";
 
 const annotation = {
@@ -20,39 +23,39 @@ const annotation = {
 
 describe("Codex response annotation directives", () => {
   it("accepts one-based native directives and rejects malformed syntax", () => {
-    expect(parseCodexResponseAnnotationDirective(':codex-annotation{index="2"}')).toEqual({
+    expect(parseResponseAnnotationDirective(':codex-annotation{index="2"}')).toEqual({
       rawIndex: "2",
       index: 2,
     });
-    expect(parseCodexResponseAnnotationDirective(':codex-annotation{index="0"}')).toEqual({
+    expect(parseResponseAnnotationDirective(':codex-annotation{index="0"}')).toEqual({
       rawIndex: "0",
       index: 0,
     });
-    expect(parseCodexResponseAnnotationDirective(":codex-annotation{index=2}")).toBeNull();
-    expect(parseCodexResponseAnnotationDirective(':codex-annotation{index="two"}')).toBeNull();
-    expect(formatCodexResponseAnnotationDirective(2)).toBe(':codex-annotation{index="2"}');
-    expect(() => formatCodexResponseAnnotationDirective(0)).toThrow(RangeError);
+    expect(parseResponseAnnotationDirective(":codex-annotation{index=2}")).toBeNull();
+    expect(parseResponseAnnotationDirective(':codex-annotation{index="two"}')).toBeNull();
+    expect(formatResponseAnnotationDirective(2)).toBe(':codex-annotation{index="2"}');
+    expect(() => formatResponseAnnotationDirective(0)).toThrow(RangeError);
   });
 
   it("resolves only an in-range one-based index", () => {
-    const directive = parseCodexResponseAnnotationDirective(':codex-annotation{index="1"}')!;
+    const directive = parseResponseAnnotationDirective(':codex-annotation{index="1"}')!;
     expect(resolveCodexResponseAnnotation(directive, [annotation])).toBe(annotation);
     expect(
       resolveCodexResponseAnnotation(
-        parseCodexResponseAnnotationDirective(':codex-annotation{index="3"}')!,
+        parseResponseAnnotationDirective(':codex-annotation{index="3"}')!,
         [annotation],
       ),
     ).toBeNull();
     expect(
       resolveCodexResponseAnnotation(
-        parseCodexResponseAnnotationDirective(':codex-annotation{index="0"}')!,
+        parseResponseAnnotationDirective(':codex-annotation{index="0"}')!,
         [annotation],
       ),
     ).toBeNull();
   });
 
   it("splits valid directives while retaining surrounding prose", () => {
-    expect(splitCodexResponseAnnotationText('a :codex-annotation{index="1"} b')).toEqual([
+    expect(splitResponseAnnotationDirectives('a :codex-annotation{index="1"} b')).toEqual([
       { kind: "text", value: "a " },
       {
         kind: "directive",
@@ -60,7 +63,7 @@ describe("Codex response annotation directives", () => {
       },
       { kind: "text", value: " b" },
     ]);
-    expect(splitCodexResponseAnnotationText(':codex-annotation{index="x"}')).toEqual([
+    expect(splitResponseAnnotationDirectives(':codex-annotation{index="x"}')).toEqual([
       { kind: "text", value: ':codex-annotation{index="x"}' },
     ]);
   });

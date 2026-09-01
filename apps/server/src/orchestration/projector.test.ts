@@ -490,10 +490,10 @@ describe("orchestration projector", () => {
     expect(message?.updatedAt).toBe(completeAt);
   });
 
-  it("keeps response annotations on projected user message updates", async () => {
-    const createdAt = "2026-02-23T09:30:00.000Z";
-    const afterCreate = await Effect.runPromise(
-      projectEvent(
+  effectIt.effect("keeps response annotations on projected user message updates", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-02-23T09:30:00.000Z";
+      const afterCreate = yield* projectEvent(
         createEmptyReadModel(createdAt),
         makeEvent({
           sequence: 1,
@@ -517,19 +517,17 @@ describe("orchestration projector", () => {
             updatedAt: createdAt,
           },
         }),
-      ),
-    );
-    const responseAnnotations = [
-      {
-        id: "annotation-1",
-        sourceMessageId: "assistant-source-1",
-        selectedText: "selected text",
-        sourceRange: { start: 3, end: 16, prefix: "a ", suffix: " b" },
-        comment: "Explain this.",
-      },
-    ];
-    const afterMessage = await Effect.runPromise(
-      projectEvent(
+      );
+      const responseAnnotations = [
+        {
+          id: "annotation-1",
+          sourceMessageId: "assistant-source-1",
+          selectedText: "selected text",
+          sourceRange: { start: 3, end: 16, prefix: "a ", suffix: " b" },
+          comment: "Explain this.",
+        },
+      ];
+      const afterMessage = yield* projectEvent(
         afterCreate,
         makeEvent({
           sequence: 2,
@@ -550,10 +548,8 @@ describe("orchestration projector", () => {
             updatedAt: createdAt,
           },
         }),
-      ),
-    );
-    const afterUpdate = await Effect.runPromise(
-      projectEvent(
+      );
+      const afterUpdate = yield* projectEvent(
         afterMessage,
         makeEvent({
           sequence: 3,
@@ -573,11 +569,9 @@ describe("orchestration projector", () => {
             updatedAt: "2026-02-23T09:30:01.000Z",
           },
         }),
-      ),
-    );
+      );
 
-    const afterBind = await Effect.runPromise(
-      projectEvent(
+      const afterBind = yield* projectEvent(
         afterUpdate,
         makeEvent({
           sequence: 4,
@@ -598,15 +592,15 @@ describe("orchestration projector", () => {
             updatedAt: "2026-02-23T09:30:02.000Z",
           },
         }),
-      ),
-    );
+      );
 
-    expect(afterBind.threads[0]?.messages[0]).toMatchObject({
-      text: "Please explain more.",
-      responseAnnotations,
-      turnId: "turn-response-annotations",
-    });
-  });
+      expect(afterBind.threads[0]?.messages[0]).toMatchObject({
+        text: "Please explain more.",
+        responseAnnotations,
+        turnId: "turn-response-annotations",
+      });
+    }),
+  );
 
   it("prunes reverted turn messages from in-memory thread snapshot", async () => {
     const createdAt = "2026-02-23T10:00:00.000Z";

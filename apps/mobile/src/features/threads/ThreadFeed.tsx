@@ -30,6 +30,7 @@ import {
   splitCodexArtifactTemplateMarkdown,
 } from "@t3tools/client-runtime/codex-markdown-directives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { containsResponseAnnotationDirective } from "@t3tools/shared/responseAnnotations";
 import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
@@ -1612,7 +1613,7 @@ function renderFeedEntry(
         ? (props.responseAnnotationsByTurnId.get(message.turnId) ?? [])
         : [];
     const assistantMarkdown =
-      message.role === "assistant" && renderedText.includes(':codex-annotation{index="')
+      message.role === "assistant" && containsResponseAnnotationDirective(renderedText)
         ? prepareResponseAnnotationMarkdown(renderedText, responseAnnotations)
         : renderedText;
     const assistantMarkdownLinkHandlers =
@@ -2597,20 +2598,29 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     props.loadEarlier.onLoadEarlier();
   }, [props.loadEarlier]);
 
+  // Both the initial press and the retry effect (after an older page loads or a
+  // collapsed turn expands) land here, so the reveal behaviour has one home.
+  const revealResponseAnnotationSourceIndex = useCallback(
+    (sourceIndex: number) => {
+      setPendingResponseAnnotationSourceId(null);
+      requestAnimationFrame(() => {
+        props.listRef.current?.scrollToIndex({
+          index: sourceIndex,
+          animated: true,
+          viewPosition: 0.3,
+        });
+      });
+    },
+    [props.listRef],
+  );
+
   const scrollToResponseAnnotationSourceMessage = useCallback(
     (sourceMessageId: MessageId) => {
       const sourceIndex = presentedFeed.findIndex(
         (entry) => entry.type === "message" && entry.message.id === sourceMessageId,
       );
       if (sourceIndex >= 0) {
-        setPendingResponseAnnotationSourceId(null);
-        requestAnimationFrame(() => {
-          props.listRef.current?.scrollToIndex({
-            index: sourceIndex,
-            animated: true,
-            viewPosition: 0.3,
-          });
-        });
+        revealResponseAnnotationSourceIndex(sourceIndex);
         return;
       }
 
@@ -2645,9 +2655,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       expandedTurnIds,
       presentedFeed,
       props.feed,
-      props.listRef,
       props.loadEarlier,
       requestOlderTurnsForResponseAnnotation,
+      revealResponseAnnotationSourceIndex,
     ],
   );
 
@@ -2659,15 +2669,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       (entry) => entry.type === "message" && entry.message.id === pendingResponseAnnotationSourceId,
     );
     if (sourceIndex >= 0) {
-      setPendingResponseAnnotationSourceId(null);
-      const targetIndex = sourceIndex;
-      requestAnimationFrame(() => {
-        props.listRef.current?.scrollToIndex({
-          index: targetIndex,
-          animated: true,
-          viewPosition: 0.3,
-        });
-      });
+      revealResponseAnnotationSourceIndex(sourceIndex);
       return;
     }
     if (props.loadEarlier === null || props.loadEarlier === undefined) {
@@ -2678,27 +2680,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   }, [
     pendingResponseAnnotationSourceId,
     presentedFeed,
-    props.listRef,
     props.loadEarlier,
     requestOlderTurnsForResponseAnnotation,
+    revealResponseAnnotationSourceIndex,
   ]);
 
-  const scrollToResponseAnnotationSource = useCallback(
-    (annotation: ResponseAnnotation) => {
-      scrollToResponseAnnotationSourceMessage(annotation.sourceMessageId);
-    },
-    [scrollToResponseAnnotationSourceMessage],
-  );
   const onResponseAnnotationPress = useCallback(
     (annotation: ResponseAnnotation, index: number) => {
       void Haptics.selectionAsync();
-      scrollToResponseAnnotationSource(annotation);
+      scrollToResponseAnnotationSourceMessage(annotation.sourceMessageId);
       const selectedText = annotation.selectedText.trim();
       const comment = annotation.comment.trim();
       const detail = comment.length > 0 ? `${selectedText}\n\n${comment}` : selectedText;
       Alert.alert(`Annotation ${index}`, detail, [{ text: "OK", style: "cancel" }]);
     },
-    [scrollToResponseAnnotationSource],
+    [scrollToResponseAnnotationSourceMessage],
   );
   useEffect(() => {
     onResponseAnnotationPressRef.current = onResponseAnnotationPress;
