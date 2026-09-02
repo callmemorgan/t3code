@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as ProcessRunner from "../processRunner.ts";
@@ -320,6 +321,30 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
       );
       assert.deepEqual(yield* sweep, { status: "pruned", dryRun: false, versions: ["1.8.0"] });
       assert.isFalse(yield* fs.exists(stale.versionDir));
+    }),
+  );
+
+  it.effect("fails instead of reporting missing state when the state file cannot be read", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const cause = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "readFileString",
+        description: "permission denied",
+        pathOrDescriptor: "/t3/runtime/service-state.json",
+      });
+      const fs = FileSystem.makeNoop({ readFileString: () => Effect.fail(cause) });
+
+      const error = yield* sweepPinnedRuntimes({
+        baseDir: "/t3",
+        keep: 1,
+        dryRun: false,
+        fs,
+        path,
+      }).pipe(Effect.flip);
+
+      assert.strictEqual(error, cause);
     }),
   );
 });

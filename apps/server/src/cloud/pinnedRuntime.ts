@@ -321,9 +321,12 @@ export type PinnedRuntimeSweepResult =
 
 /**
  * Applies the retention count against launcher-owned state. The launcher is
- * the only writer of that state, so a missing, unreadable, or invalid file and
- * a pending update all skip the sweep instead of guessing which runtimes are
- * still needed; callers decide whether a skip is an error or a log line.
+ * the only writer of that state, so a missing or invalid file and a pending
+ * update all skip the sweep instead of guessing which runtimes are still
+ * needed; callers decide whether a skip is an error or a log line. A file that
+ * exists but cannot be read is a different situation and fails with the
+ * filesystem cause, so a permissions or I/O problem is never reported as
+ * "no state".
  */
 export const sweepPinnedRuntimes = Effect.fn("cloud.pinned_runtime.sweep")(function* (input: {
   readonly baseDir: string;
@@ -333,7 +336,12 @@ export const sweepPinnedRuntimes = Effect.fn("cloud.pinned_runtime.sweep")(funct
   readonly path: Path.Path;
 }) {
   const statePath = input.path.join(input.baseDir, PINNED_RUNTIME_DIR, SERVICE_STATE_FILE);
-  const stateText = yield* input.fs.readFileString(statePath).pipe(Effect.option);
+  const stateText = yield* input.fs.readFileString(statePath).pipe(
+    Effect.map(Option.some),
+    Effect.catch((error) =>
+      error.reason._tag === "NotFound" ? Effect.succeed(Option.none<string>()) : Effect.fail(error),
+    ),
+  );
   if (Option.isNone(stateText)) {
     return { status: "skipped", reason: "no-service-state" } as const;
   }

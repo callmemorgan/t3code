@@ -122,12 +122,22 @@ const runServiceCommand = Effect.fn("cli.service.run")(function* <A, E>(
 });
 
 // `t3 service prune` runs outside the server, so it reads the retention count
-// straight from the settings file, defaulting when the file is missing or malformed.
+// straight from the settings file. A missing file means nothing was ever
+// configured and the default applies; a malformed one decodes to nothing and
+// also defaults, matching the server. A file that exists but cannot be read
+// fails the command instead: pruning on an invented count could remove
+// runtimes the user asked to keep.
 const resolveRetainedServerRuntimes = Effect.fn("cli.service.resolve_retained_runtimes")(function* (
   settingsPath: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const raw = yield* fs.readFileString(settingsPath).pipe(Effect.orElseSucceed(() => ""));
+  const raw = yield* fs
+    .readFileString(settingsPath)
+    .pipe(
+      Effect.catch((error) =>
+        error.reason._tag === "NotFound" ? Effect.succeed("") : Effect.fail(error),
+      ),
+    );
   return Option.match(parsePersistedServerSettings(raw), {
     onNone: () => DEFAULT_RETAINED_SERVER_RUNTIMES,
     onSome: (settings) => settings.retainedServerRuntimes,

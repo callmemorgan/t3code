@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Terminal from "effect/Terminal";
 import { Command } from "effect/unstable/cli";
 import { afterEach, vi } from "vite-plus/test";
@@ -156,6 +157,45 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands
       );
 
       expect(pruneOptions).toEqual([{ dryRun: true, keep }]);
+    }),
+  );
+
+  it.effect("prune fails before touching runtimes when the settings file cannot be read", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-cli-test-" });
+      const settingsPath = path.join(baseDir, "userdata", "settings.json");
+      const cause = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "readFileString",
+        description: "permission denied",
+        pathOrDescriptor: settingsPath,
+      });
+      const unreadableSettings = FileSystem.FileSystem.of({
+        ...fs,
+        readFileString: (file, encoding) =>
+          file === settingsPath ? Effect.fail(cause) : fs.readFileString(file, encoding),
+      });
+      const { service, pruneOptions } = makeTestService(status);
+      vi.spyOn(BootService, "layer").mockReturnValue(
+        Layer.succeed(BootService.BootService, service),
+      );
+
+      const error = yield* Command.runWith(serviceCommand, { version: packageJson.version })([
+        "prune",
+        "--base-dir",
+        baseDir,
+      ]).pipe(
+        Effect.provideService(FileSystem.FileSystem, unreadableSettings),
+        Effect.provideService(HostProcessEnvironment, {}),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+        Effect.flip,
+      );
+
+      expect(error).toBe(cause);
+      expect(pruneOptions).toEqual([]);
     }),
   );
 
