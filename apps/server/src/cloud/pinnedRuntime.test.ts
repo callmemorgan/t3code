@@ -14,6 +14,7 @@ import {
   pinnedRuntimePaths,
   PinnedRuntimeInstallError,
   prunePinnedRuntimes,
+  sweepManagedRuntimes,
   sweepPinnedRuntimes,
 } from "./pinnedRuntime.ts";
 import { SERVICE_LAUNCHER_PROTOCOL, type ServiceState } from "./serviceProtocol.ts";
@@ -345,6 +346,111 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
       }).pipe(Effect.flip);
 
       assert.strictEqual(error, cause);
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("sweepManagedRuntimes", (it) => {
+  const committedState = (activeVersion: string, fromVersion: string) =>
+    // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned test document.
+    JSON.stringify({
+      protocol: SERVICE_LAUNCHER_PROTOCOL,
+      activeVersion,
+      update: { id: "update", fromVersion, targetVersion: activeVersion, status: "committed" },
+    });
+
+  it.effect("never touches the runtime directory for a server the launcher does not manage", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const reads: string[] = [];
+      const fs = FileSystem.makeNoop({
+        readFileString: (file) => {
+          reads.push(file);
+          return Effect.succeed(committedState("2.0.0", "1.9.0"));
+        },
+      });
+
+      yield* sweepManagedRuntimes({
+        managed: false,
+        baseDir: "/t3",
+        retainedRuntimes: Effect.succeed(1),
+        fs,
+        path,
+      });
+
+      assert.deepEqual(reads, []);
+    }),
+  );
+
+  it.effect("prunes a managed server to the retention count", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-managed-sweep-" });
+      const stale = yield* writeCompletedRuntime(fs, path, baseDir, "1.8.0");
+      const previous = yield* writeCompletedRuntime(fs, path, baseDir, "1.9.0");
+      const active = yield* writeCompletedRuntime(fs, path, baseDir, "2.0.0");
+      yield* fs.writeFileString(
+        path.join(baseDir, "runtime", "service-state.json"),
+        committedState("2.0.0", "1.9.0"),
+      );
+
+      yield* sweepManagedRuntimes({
+        managed: true,
+        baseDir,
+        retainedRuntimes: Effect.succeed(1),
+        fs,
+        path,
+      });
+
+      assert.isFalse(yield* fs.exists(stale.versionDir));
+      assert.isTrue(yield* fs.exists(previous.versionDir));
+      assert.isTrue(yield* fs.exists(active.versionDir));
+    }),
+  );
+
+  it.effect("succeeds without deleting anything when the sweep cannot run", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-managed-sweep-fail-" });
+      const stale = yield* writeCompletedRuntime(fs, path, baseDir, "1.8.0");
+      yield* writeCompletedRuntime(fs, path, baseDir, "2.0.0");
+      yield* fs.writeFileString(
+        path.join(baseDir, "runtime", "service-state.json"),
+        committedState("2.0.0", "1.9.0"),
+      );
+
+      // The settings lookup fails: the sweep must swallow it, not fail startup.
+      yield* sweepManagedRuntimes({
+        managed: true,
+        baseDir,
+        retainedRuntimes: Effect.fail("settings unavailable"),
+        fs,
+        path,
+      });
+      assert.isTrue(yield* fs.exists(stale.versionDir));
+
+      // The state file cannot be read: same contract.
+      const unreadable = FileSystem.makeNoop({
+        readFileString: () =>
+          Effect.fail(
+            PlatformError.systemError({
+              _tag: "PermissionDenied",
+              module: "FileSystem",
+              method: "readFileString",
+              pathOrDescriptor: path.join(baseDir, "runtime", "service-state.json"),
+            }),
+          ),
+      });
+      yield* sweepManagedRuntimes({
+        managed: true,
+        baseDir,
+        retainedRuntimes: Effect.succeed(1),
+        fs: unreadable,
+        path,
+      });
+      assert.isTrue(yield* fs.exists(stale.versionDir));
     }),
   );
 });

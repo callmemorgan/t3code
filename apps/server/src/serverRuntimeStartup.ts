@@ -41,7 +41,7 @@ import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDi
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
-import { sweepPinnedRuntimes } from "./cloud/pinnedRuntime.ts";
+import { sweepManagedRuntimes } from "./cloud/pinnedRuntime.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -652,29 +652,18 @@ export const make = (options?: StartupOptions) =>
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
-    // A launcher-managed server owns the runtime directory once its update has
-    // settled, so it applies the retention count itself. Forked and best-effort:
-    // deleting a stack of npm trees must never delay or fail readiness.
-    const sweepServiceRuntimes = Effect.gen(function* () {
-      const { retainedServerRuntimes: keep } = yield* serverSettings.getSettings;
-      const result = yield* sweepPinnedRuntimes({
-        baseDir: serverConfig.baseDir,
-        keep,
-        dryRun: false,
-        fs,
-        path,
-      });
-      if (result.status === "skipped") {
-        yield* Effect.logDebug("Skipped the service runtime sweep", { reason: result.reason });
-      } else if (result.versions.length > 0) {
-        yield* Effect.logInfo("Removed old service runtimes", { keep, versions: result.versions });
-      }
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Could not remove old service runtimes", { cause }),
+    // Forked so deleting a stack of npm trees never delays readiness. The
+    // managed-only gate and the never-fail handling live with the sweep itself.
+    const sweepServiceRuntimes = sweepManagedRuntimes({
+      managed: launcher.managed,
+      baseDir: serverConfig.baseDir,
+      retainedRuntimes: Effect.map(
+        serverSettings.getSettings,
+        (settings) => settings.retainedServerRuntimes,
       ),
-      Effect.withSpan("server.startup.runtime_sweep"),
-    );
+      fs,
+      path,
+    });
 
     const commandGate = yield* makeCommandGate;
     const httpListening = yield* Deferred.make<void>();
@@ -827,9 +816,7 @@ export const make = (options?: StartupOptions) =>
           },
         }),
       );
-      if (launcher.managed) {
-        yield* Effect.forkScoped(sweepServiceRuntimes);
-      }
+      yield* Effect.forkScoped(sweepServiceRuntimes);
       yield* Effect.logDebug("startup phase: complete");
     }).pipe(
       Effect.annotateSpans({

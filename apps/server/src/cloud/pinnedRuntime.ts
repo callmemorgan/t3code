@@ -355,3 +355,41 @@ export const sweepPinnedRuntimes = Effect.fn("cloud.pinned_runtime.sweep")(funct
   const result = yield* prunePinnedRuntimes({ ...input, state });
   return { status: "pruned", ...result } satisfies PinnedRuntimeSweepResult;
 });
+
+/**
+ * The startup side of retention. Only a launcher-managed server owns
+ * runtime/versions, so a foreground `npx t3` process never walks it. Nothing
+ * here can fail the caller: a permissions problem or a slow delete is a
+ * warning, not a boot failure. A skip is also a warning rather than debug
+ * noise, because on a managed server whose update has settled, missing,
+ * invalid, or still-pending state is an anomaly an operator asking "did
+ * cleanup run?" needs to see.
+ */
+export const sweepManagedRuntimes = <E>(input: {
+  readonly managed: boolean;
+  readonly baseDir: string;
+  readonly retainedRuntimes: Effect.Effect<number, E>;
+  readonly fs: FileSystem.FileSystem;
+  readonly path: Path.Path;
+}): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    if (!input.managed) return;
+    const keep = yield* input.retainedRuntimes;
+    const result = yield* sweepPinnedRuntimes({
+      baseDir: input.baseDir,
+      keep,
+      dryRun: false,
+      fs: input.fs,
+      path: input.path,
+    });
+    if (result.status === "skipped") {
+      yield* Effect.logWarning("Skipped the service runtime sweep", { reason: result.reason });
+    } else if (result.versions.length > 0) {
+      yield* Effect.logInfo("Removed old service runtimes", { keep, versions: result.versions });
+    }
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Could not remove old service runtimes", { cause }),
+    ),
+    Effect.withSpan("cloud.pinned_runtime.startup_sweep"),
+  );

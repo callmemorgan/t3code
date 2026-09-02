@@ -67,7 +67,9 @@ concurrently staged forward-update target outside the prune set.
 
 Two callers apply the count. A launcher-managed server sweeps once at startup, after `prepareTrial`
 settles, so a committed update cleans up behind itself and a restart applies a lowered count. The
-sweep is forked and best-effort: it logs what it removed or why it skipped, and never fails startup.
+sweep (`sweepManagedRuntimes`) is forked and best-effort: it logs removals at info, warns when it
+skipped or failed, and never fails startup. A skip on a managed server is an anomaly, since the
+launcher needs valid state to have started the child at all.
 `t3 service prune [--dry-run]` applies the same count from the CLI, reading it from `settings.json`,
 and refuses while an update is pending. Neither stops or restarts the service.
 

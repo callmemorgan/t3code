@@ -808,7 +808,16 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       }).pipe(
         Effect.mapError(
           (cause) =>
-            new BootServicePruneError({ path: path.dirname(runtimePaths.versionDir), cause }),
+            new BootServicePruneError({
+              // The filesystem error names what it touched (the state file or
+              // one version tree); fall back to the versions directory.
+              path:
+                "pathOrDescriptor" in cause.reason &&
+                typeof cause.reason.pathOrDescriptor === "string"
+                  ? cause.reason.pathOrDescriptor
+                  : path.dirname(runtimePaths.versionDir),
+              cause,
+            }),
         ),
       );
       if (result.status === "skipped") {
