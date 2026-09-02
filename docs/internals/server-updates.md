@@ -54,17 +54,22 @@ snapshot, records rollback, and starts A. A durable restore marker makes an inte
 resume before either version can boot. After commit, B is active and the service manager's normal
 restart policy applies.
 
-## Runtime Pruning
+## Runtime Retention
 
-`t3 service prune` removes completed exact-version installs that are older than the active version
-and are not named by the latest update record. It ignores incomplete installs, staging directories,
-symlinks, unexpected directory names, and newer versions. `--dry-run` reports the same candidates
-without removing them.
+Every install under `versions/` is immutable and nothing else removes it, so the
+`retainedServerRuntimes` server setting (default 2) caps how many completed runtimes older than the
+active one stay on disk. `prunePinnedRuntimes` selects candidates from launcher-owned state. It never
+removes the active version, either version named by the latest update record, anything newer than
+the active version, incomplete installs, staging directories, symlinks, or unexpected directory
+names. Of the remaining completed older versions it keeps the newest `retainedServerRuntimes` and
+removes the rest. Restricting candidates to versions older than the active runtime keeps a
+concurrently staged forward-update target outside the prune set.
 
-The command parses launcher-owned state before selecting candidates and refuses to run while an
-update is pending. It does not stop or restart the service. Restricting candidates to versions older
-than the active runtime also keeps a concurrently staged forward-update target outside the prune
-set.
+Two callers apply the count. A launcher-managed server sweeps once at startup, after `prepareTrial`
+settles, so a committed update cleans up behind itself and a restart applies a lowered count. The
+sweep is forked and best-effort: it logs what it removed or why it skipped, and never fails startup.
+`t3 service prune [--dry-run]` applies the same count from the CLI, reading it from `settings.json`,
+and refuses while an update is pending. Neither stops or restarts the service.
 
 ## Database Rollback
 

@@ -65,6 +65,16 @@ export const SidebarAutoSettleAfterDays = Schema.Number.check(
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
 export const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 3;
+export const MIN_RETAINED_SERVER_RUNTIMES = 1;
+export const MAX_RETAINED_SERVER_RUNTIMES = 20;
+export const RetainedServerRuntimes = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_RETAINED_SERVER_RUNTIMES,
+    maximum: MAX_RETAINED_SERVER_RUNTIMES,
+  }),
+);
+export type RetainedServerRuntimes = typeof RetainedServerRuntimes.Type;
+export const DEFAULT_RETAINED_SERVER_RUNTIMES: RetainedServerRuntimes = 2;
 export const MIN_GLASS_OPACITY = 40;
 export const MAX_GLASS_OPACITY = 100;
 export const GlassOpacity = Schema.Int.check(
@@ -678,6 +688,17 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
   sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * How many previous exact-version runtimes the background service keeps
+   * beside the active one. Each remote or `t3 service update` installs a
+   * fresh runtime, so without a cap a nightly server fills its disk. The
+   * server sweeps older runtimes when it starts, and `t3 service prune`
+   * applies the same count by hand. Machine config, not a user preference:
+   * it describes one host's disk, so it is not a shared setting.
+   */
+  retainedServerRuntimes: RetainedServerRuntimes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_RETAINED_SERVER_RUNTIMES)),
+  ),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -905,6 +926,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
+  retainedServerRuntimes: Schema.optionalKey(RetainedServerRuntimes),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),

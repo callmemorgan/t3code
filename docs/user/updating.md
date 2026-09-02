@@ -22,7 +22,10 @@ ready. Providers with native promptless continuation use it; other providers rec
 instruction to continue where they left off. Terminal commands and other running work may still be
 interrupted during the update.
 
-The update does not remove saved threads, settings, or project files.
+The update does not remove saved threads, settings, or project files. On a background-service
+server it does remove older copies of T3 Code left behind by earlier updates, keeping the active
+version plus a few before it; see [Running T3 Code in the Background](./background-service.md) for
+the setting.
 
 ## Choose the Action You See
 

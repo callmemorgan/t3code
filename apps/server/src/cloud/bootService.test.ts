@@ -395,22 +395,28 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       const { service, fs, baseDir, commands } = yield* makeHarness();
       yield* service.install();
       const path = yield* Path.Path;
-      const oldRuntime = pinnedRuntimePaths(path, baseDir, "1.2.2");
-      yield* fs.makeDirectory(path.dirname(oldRuntime.entryPath), { recursive: true });
-      yield* fs.writeFileString(oldRuntime.entryPath, "export {};\n");
-      yield* fs.writeFileString(oldRuntime.sentinelPath, "1.2.2\n");
+      const writeRuntime = Effect.fn(function* (version: string) {
+        const runtime = pinnedRuntimePaths(path, baseDir, version);
+        yield* fs.makeDirectory(path.dirname(runtime.entryPath), { recursive: true });
+        yield* fs.writeFileString(runtime.entryPath, "export {};\n");
+        yield* fs.writeFileString(runtime.sentinelPath, `${version}\n`);
+        return runtime;
+      });
+      const stale = yield* writeRuntime("1.2.1");
+      const previous = yield* writeRuntime("1.2.2");
       commands.length = 0;
 
-      expect(yield* service.prune({ dryRun: true })).toEqual({
+      expect(yield* service.prune({ dryRun: true, keep: 1 })).toEqual({
         dryRun: true,
-        versions: ["1.2.2"],
+        versions: ["1.2.1"],
       });
-      expect(yield* fs.exists(oldRuntime.versionDir)).toBe(true);
-      expect(yield* service.prune({ dryRun: false })).toEqual({
+      expect(yield* fs.exists(stale.versionDir)).toBe(true);
+      expect(yield* service.prune({ dryRun: false, keep: 1 })).toEqual({
         dryRun: false,
-        versions: ["1.2.2"],
+        versions: ["1.2.1"],
       });
-      expect(yield* fs.exists(oldRuntime.versionDir)).toBe(false);
+      expect(yield* fs.exists(stale.versionDir)).toBe(false);
+      expect(yield* fs.exists(previous.versionDir)).toBe(true);
       expect(commands).toEqual([]);
     }),
   );
@@ -433,7 +439,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       });
       yield* fs.writeFileString(statePath, pendingState);
 
-      expect((yield* service.prune({ dryRun: false }).pipe(Effect.flip))._tag).toBe(
+      expect((yield* service.prune({ dryRun: false, keep: 1 }).pipe(Effect.flip))._tag).toBe(
         "BootServiceUpdatePendingError",
       );
     }),
@@ -443,7 +449,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     Effect.gen(function* () {
       const { service, statePath } = yield* makeHarness();
 
-      expect(yield* service.prune({ dryRun: false }).pipe(Effect.flip)).toMatchObject({
+      expect(yield* service.prune({ dryRun: false, keep: 1 }).pipe(Effect.flip)).toMatchObject({
         _tag: "BootServicePruneStateError",
         statePath,
       });

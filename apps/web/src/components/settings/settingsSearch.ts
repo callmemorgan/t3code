@@ -198,6 +198,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["resume running active work restart desktop update automatically"],
   },
   {
+    id: "retained-server-runtimes",
+    title: "Previous server runtimes to keep",
+    to: "/settings/general",
+    searchTerms: ["background service versions disk space prune cleanup old nightly installs"],
+  },
+  {
     id: "background-activity",
     title: "Background activity",
     to: "/settings/general",

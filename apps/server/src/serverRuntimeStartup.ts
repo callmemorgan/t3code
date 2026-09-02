@@ -16,6 +16,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -40,6 +41,7 @@ import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDi
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
+import { sweepPinnedRuntimes } from "./cloud/pinnedRuntime.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -647,6 +649,32 @@ export const make = (options?: StartupOptions) =>
     const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
     const crypto = yield* Crypto.Crypto;
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+
+    // A launcher-managed server owns the runtime directory once its update has
+    // settled, so it applies the retention count itself. Forked and best-effort:
+    // deleting a stack of npm trees must never delay or fail readiness.
+    const sweepServiceRuntimes = Effect.gen(function* () {
+      const { retainedServerRuntimes: keep } = yield* serverSettings.getSettings;
+      const result = yield* sweepPinnedRuntimes({
+        baseDir: serverConfig.baseDir,
+        keep,
+        dryRun: false,
+        fs,
+        path,
+      });
+      if (result.status === "skipped") {
+        yield* Effect.logDebug("Skipped the service runtime sweep", { reason: result.reason });
+      } else if (result.versions.length > 0) {
+        yield* Effect.logInfo("Removed old service runtimes", { keep, versions: result.versions });
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not remove old service runtimes", { cause }),
+      ),
+      Effect.withSpan("server.startup.runtime_sweep"),
+    );
 
     const commandGate = yield* makeCommandGate;
     const httpListening = yield* Deferred.make<void>();
@@ -799,6 +827,9 @@ export const make = (options?: StartupOptions) =>
           },
         }),
       );
+      if (launcher.managed) {
+        yield* Effect.forkScoped(sweepServiceRuntimes);
+      }
       yield* Effect.logDebug("startup phase: complete");
     }).pipe(
       Effect.annotateSpans({

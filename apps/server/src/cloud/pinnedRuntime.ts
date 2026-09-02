@@ -10,6 +10,8 @@ import * as ProcessRunner from "../processRunner.ts";
 import {
   compareExactServiceVersions,
   isExactServiceVersion,
+  parseServiceState,
+  SERVICE_STATE_FILE,
   type ServiceState,
 } from "./serviceProtocol.ts";
 
@@ -231,9 +233,17 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
 export const ensurePinnedRuntimeInstalled = (input: PinnedRuntimeInstallInput) =>
   pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input));
 
+/**
+ * Removes completed runtimes older than the active one, keeping the newest
+ * `keep` of them beside the active version. Never touches the active version,
+ * either version named by the latest update record, anything newer than the
+ * active version (a concurrently staged forward-update target), incomplete
+ * installs, staging directories, symlinks, or unexpected directory names.
+ */
 export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(function* (input: {
   readonly baseDir: string;
   readonly state: ServiceState;
+  readonly keep: number;
   readonly dryRun: boolean;
   readonly fs: FileSystem.FileSystem;
   readonly path: Path.Path;
@@ -251,11 +261,10 @@ export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(funct
   ]);
   const realVersionsDir = yield* input.fs.realPath(versionsDir);
   const entries = yield* input.fs.readDirectory(versionsDir);
-  const versions = yield* Effect.filter(entries, (version) =>
+  const olderCompleted = yield* Effect.filter(entries, (version) =>
     Effect.gen(function* () {
       if (
         !isExactServiceVersion(version) ||
-        protectedVersions.has(version) ||
         compareExactServiceVersions(version, input.state.activeVersion) >= 0
       ) {
         return false;
@@ -277,10 +286,16 @@ export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(funct
       return entryExists && Option.isSome(sentinel) && sentinel.value.trim() === version;
     }),
   );
-  versions.sort((left, right) => {
+  olderCompleted.sort((left, right) => {
     const precedence = compareExactServiceVersions(left, right);
     return precedence === 0 ? left.localeCompare(right) : precedence;
   });
+  // The newest previous runtimes count toward `keep` whether or not the
+  // update record already protects them, so "keep 2" reads as two versions.
+  const retained = new Set(olderCompleted.slice(Math.max(0, olderCompleted.length - input.keep)));
+  const versions = olderCompleted.filter(
+    (version) => !protectedVersions.has(version) && !retained.has(version),
+  );
 
   if (!input.dryRun) {
     yield* Effect.forEach(
@@ -295,4 +310,40 @@ export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(funct
   }
 
   return { dryRun: input.dryRun, versions } satisfies PinnedRuntimePruneResult;
+});
+
+export type PinnedRuntimeSweepResult =
+  | ({ readonly status: "pruned" } & PinnedRuntimePruneResult)
+  | {
+      readonly status: "skipped";
+      readonly reason: "no-service-state" | "invalid-service-state" | "update-pending";
+    };
+
+/**
+ * Applies the retention count against launcher-owned state. The launcher is
+ * the only writer of that state, so a missing, unreadable, or invalid file and
+ * a pending update all skip the sweep instead of guessing which runtimes are
+ * still needed; callers decide whether a skip is an error or a log line.
+ */
+export const sweepPinnedRuntimes = Effect.fn("cloud.pinned_runtime.sweep")(function* (input: {
+  readonly baseDir: string;
+  readonly keep: number;
+  readonly dryRun: boolean;
+  readonly fs: FileSystem.FileSystem;
+  readonly path: Path.Path;
+}) {
+  const statePath = input.path.join(input.baseDir, PINNED_RUNTIME_DIR, SERVICE_STATE_FILE);
+  const stateText = yield* input.fs.readFileString(statePath).pipe(Effect.option);
+  if (Option.isNone(stateText)) {
+    return { status: "skipped", reason: "no-service-state" } as const;
+  }
+  const state = parseServiceState(stateText.value);
+  if (state === undefined) {
+    return { status: "skipped", reason: "invalid-service-state" } as const;
+  }
+  if (state.update?.status === "pending") {
+    return { status: "skipped", reason: "update-pending" } as const;
+  }
+  const result = yield* prunePinnedRuntimes({ ...input, state });
+  return { status: "pruned", ...result } satisfies PinnedRuntimeSweepResult;
 });

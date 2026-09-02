@@ -231,6 +231,19 @@ describe("ServerSettings thread settlement", () => {
   });
 });
 
+describe("ServerSettings runtime retention", () => {
+  it("keeps two previous service runtimes by default", () => {
+    expect(decodeServerSettings({}).retainedServerRuntimes).toBe(2);
+    expect(decodeServerSettings({ retainedServerRuntimes: 5 }).retainedServerRuntimes).toBe(5);
+    expect(decodeServerSettingsPatch({ retainedServerRuntimes: 1 }).retainedServerRuntimes).toBe(1);
+  });
+
+  it.each([0, 21, 2.5])("rejects a retention count outside 1..20: %s", (value) => {
+    expect(() => decodeServerSettings({ retainedServerRuntimes: value })).toThrow();
+    expect(() => decodeServerSettingsPatch({ retainedServerRuntimes: value })).toThrow();
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults text generation to Luna at low reasoning effort", () => {
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({

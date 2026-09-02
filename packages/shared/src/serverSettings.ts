@@ -23,6 +23,10 @@ import {
 const ServerSettingsJson = fromLenientJson(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
 
+/** Decodes a `settings.json` body with defaults applied; none when it is missing or malformed. */
+export const parsePersistedServerSettings = (raw: string): Option.Option<ServerSettings> =>
+  decodeServerSettingsJson(raw);
+
 type LegacyProviderSettings = ServerSettings["providers"][keyof ServerSettings["providers"]];
 
 const getLegacyProviderSettings = (

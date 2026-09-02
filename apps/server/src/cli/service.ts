@@ -1,14 +1,18 @@
+import { DEFAULT_RETAINED_SERVER_RUNTIMES } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { parsePersistedServerSettings } from "@t3tools/shared/serverSettings";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Terminal from "effect/Terminal";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/unstable/cli";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as BootService from "../cloud/bootService.ts";
 import { compareExactServiceVersions } from "../cloud/serviceProtocol.ts";
-import type * as ServerConfig from "../config.ts";
+import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 
@@ -104,11 +108,30 @@ export function formatServicePruneResult(result: BootService.BootServicePruneRes
 
 const runServiceCommand = Effect.fn("cli.service.run")(function* <A, E>(
   flags: { readonly baseDir: Parameters<typeof resolveCliAuthConfig>[0]["baseDir"] },
-  run: Effect.Effect<A, E, BootService.BootService>,
+  run: Effect.Effect<
+    A,
+    E,
+    BootService.BootService | ServerConfig.ServerConfig | FileSystem.FileSystem
+  >,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
-  return yield* run.pipe(Effect.provide(bootServiceLayer(config)));
+  return yield* run.pipe(
+    Effect.provide(Layer.mergeAll(bootServiceLayer(config), ServerConfig.layer(config))),
+  );
+});
+
+// `t3 service prune` runs outside the server, so it reads the retention count
+// straight from the settings file, defaulting when the file is missing or malformed.
+const resolveRetainedServerRuntimes = Effect.fn("cli.service.resolve_retained_runtimes")(function* (
+  settingsPath: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const raw = yield* fs.readFileString(settingsPath).pipe(Effect.orElseSucceed(() => ""));
+  return Option.match(parsePersistedServerSettings(raw), {
+    onNone: () => DEFAULT_RETAINED_SERVER_RUNTIMES,
+    onSome: (settings) => settings.retainedServerRuntimes,
+  });
 });
 
 const serviceReconcileFlags = {
@@ -205,7 +228,11 @@ const servicePruneCommand = Command.make("prune", {
       flags,
       Effect.gen(function* () {
         const service = yield* BootService.BootService;
-        yield* Console.log(formatServicePruneResult(yield* service.prune(flags)));
+        const config = yield* ServerConfig.ServerConfig;
+        const keep = yield* resolveRetainedServerRuntimes(config.settingsPath);
+        yield* Console.log(
+          formatServicePruneResult(yield* service.prune({ dryRun: flags.dryRun, keep })),
+        );
       }),
     ),
   ),

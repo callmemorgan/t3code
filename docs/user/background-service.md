@@ -59,8 +59,11 @@ npx t3@latest service uninstall
 
 Updating restarts T3 Code briefly. Let active agent work and terminal commands finish first.
 If a remote update is already in progress, wait for it to finish before retrying a local update.
-Pruning does not restart the service. It keeps the active runtime and both versions named by the
-latest update record, and it refuses to run while an update is pending.
+Each update installs a separate copy of T3 Code, and the service cleans up after itself: once an
+update finishes, it keeps the active version plus the two before it and removes older copies. Change
+that count under **Settings** → **General** → **Previous server runtimes to keep**. `service prune`
+applies the same count by hand without restarting the service, and it waits until any update in
+progress has finished.
 
 The service runs a small stable launcher. Exact T3 Code versions are installed separately, so a
 failed remote candidate can return to the previous version without rewriting the service

@@ -13,6 +13,7 @@ import {
   pinnedRuntimePaths,
   PinnedRuntimeInstallError,
   prunePinnedRuntimes,
+  sweepPinnedRuntimes,
 } from "./pinnedRuntime.ts";
 import { SERVICE_LAUNCHER_PROTOCOL, type ServiceState } from "./serviceProtocol.ts";
 
@@ -221,11 +222,13 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
         },
       } satisfies ServiceState;
 
-      const preview = yield* prunePinnedRuntimes({ baseDir, state, dryRun: true, fs, path });
+      const prune = (dryRun: boolean) =>
+        prunePinnedRuntimes({ baseDir, state, keep: 1, dryRun, fs, path });
+      const preview = yield* prune(true);
       assert.deepEqual(preview, { dryRun: true, versions: ["1.8.0"] });
       assert.isTrue(yield* fs.exists(removable.versionDir));
 
-      const pruned = yield* prunePinnedRuntimes({ baseDir, state, dryRun: false, fs, path });
+      const pruned = yield* prune(false);
       assert.deepEqual(pruned, { dryRun: false, versions: ["1.8.0"] });
       assert.isFalse(yield* fs.exists(removable.versionDir));
       for (const preserved of [
@@ -239,6 +242,84 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
       ]) {
         assert.isTrue(yield* fs.exists(preserved));
       }
+    }),
+  );
+
+  it.effect("keeps the newest previous runtimes up to the retention count", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-runtime-keep-" });
+      for (const version of ["1.6.0", "1.7.0", "1.8.0", "1.9.0", "2.0.0"]) {
+        yield* writeCompletedRuntime(fs, path, baseDir, version);
+      }
+      const state = {
+        protocol: SERVICE_LAUNCHER_PROTOCOL,
+        activeVersion: "2.0.0",
+        update: {
+          id: "committed-update",
+          fromVersion: "1.9.0",
+          targetVersion: "2.0.0",
+          status: "committed",
+        },
+      } satisfies ServiceState;
+      const preview = (keep: number) =>
+        prunePinnedRuntimes({ baseDir, state, keep, dryRun: true, fs, path });
+
+      assert.deepEqual((yield* preview(2)).versions, ["1.6.0", "1.7.0"]);
+      assert.deepEqual((yield* preview(3)).versions, ["1.6.0"]);
+      assert.deepEqual((yield* preview(10)).versions, []);
+    }),
+  );
+
+  it.effect("sweeps from launcher state and skips when the launcher is mid-update", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-runtime-sweep-" });
+      const stale = yield* writeCompletedRuntime(fs, path, baseDir, "1.8.0");
+      yield* writeCompletedRuntime(fs, path, baseDir, "1.9.0");
+      yield* writeCompletedRuntime(fs, path, baseDir, "2.0.0");
+      const statePath = path.join(baseDir, "runtime", "service-state.json");
+      const sweep = sweepPinnedRuntimes({ baseDir, keep: 1, dryRun: false, fs, path });
+
+      assert.deepEqual(yield* sweep, { status: "skipped", reason: "no-service-state" });
+      yield* fs.writeFileString(statePath, "not json");
+      assert.deepEqual(yield* sweep, { status: "skipped", reason: "invalid-service-state" });
+      yield* fs.writeFileString(
+        statePath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned test document.
+        JSON.stringify({
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.9.0",
+          update: {
+            id: "trial",
+            fromVersion: "1.9.0",
+            targetVersion: "2.0.0",
+            dbPath: "/tmp/state.sqlite",
+            status: "pending",
+          },
+        }),
+      );
+      assert.deepEqual(yield* sweep, { status: "skipped", reason: "update-pending" });
+      assert.isTrue(yield* fs.exists(stale.versionDir));
+
+      yield* fs.writeFileString(
+        statePath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned test document.
+        JSON.stringify({
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "2.0.0",
+          update: {
+            id: "trial",
+            fromVersion: "1.9.0",
+            targetVersion: "2.0.0",
+            status: "committed",
+          },
+        }),
+      );
+      assert.deepEqual(yield* sweep, { status: "pruned", dryRun: false, versions: ["1.8.0"] });
+      assert.isFalse(yield* fs.exists(stale.versionDir));
     }),
   );
 });

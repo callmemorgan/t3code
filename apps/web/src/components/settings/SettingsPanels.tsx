@@ -25,6 +25,7 @@ import {
   MAX_GLASS_OPACITY,
   MAX_INTERFACE_FONT_SIZE,
   MAX_PROMPT_FONT_SIZE,
+  MAX_RETAINED_SERVER_RUNTIMES,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MAX_TERMINAL_FONT_SIZE,
   MIN_CODE_FONT_SIZE,
@@ -32,6 +33,7 @@ import {
   MIN_GLASS_OPACITY,
   MIN_INTERFACE_FONT_SIZE,
   MIN_PROMPT_FONT_SIZE,
+  MIN_RETAINED_SERVER_RUNTIMES,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_TERMINAL_FONT_SIZE,
   type QuitConfirmationMode,
@@ -537,6 +539,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
         ? ["Continue threads after server updates"]
         : []),
+      ...(settings.retainedServerRuntimes !== DEFAULT_UNIFIED_SETTINGS.retainedServerRuntimes
+        ? ["Previous server runtimes to keep"]
+        : []),
       ...(isBackgroundActivityDirty ? ["Background activity"] : []),
       ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
         ? ["New thread mode"]
@@ -596,6 +601,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableLegacyTokenStreaming,
       settings.enableProviderUpdateChecks,
       settings.continueThreadsAfterServerUpdate,
+      settings.retainedServerRuntimes,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
       settings.sidebarProjectGroupingMode,
@@ -687,6 +693,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
+      retainedServerRuntimes: DEFAULT_UNIFIED_SETTINGS.retainedServerRuntimes,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -1716,12 +1723,18 @@ function FontFamilySettingsRow({
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 3;
 
-function AutoSettleDaysInput({
+function IntegerSettingInput({
   value,
+  min,
+  max,
+  ariaLabel,
   onCommit,
 }: {
   value: number;
-  onCommit: (days: number) => void;
+  min: number;
+  max: number;
+  ariaLabel: string;
+  onCommit: (value: number) => void;
 }) {
   // Local draft so the field can be emptied mid-edit; the setting only moves
   // on valid input and snaps back to the persisted value on blur.
@@ -1733,8 +1746,8 @@ function AutoSettleDaysInput({
   return (
     <Input
       type="number"
-      min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
-      max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+      min={min}
+      max={max}
       className="w-full sm:w-24"
       value={draft}
       onChange={(event) => {
@@ -1743,16 +1756,12 @@ function AutoSettleDaysInput({
         // committed 3 while the field shows 3.5) — commit only when the
         // persisted value matches the displayed one.
         const parsed = Number(event.target.value);
-        if (
-          Number.isInteger(parsed) &&
-          parsed >= MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS &&
-          parsed <= MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS
-        ) {
+        if (Number.isInteger(parsed) && parsed >= min && parsed <= max) {
           onCommit(parsed);
         }
       }}
       onBlur={() => setDraft(String(value))}
-      aria-label="Days of inactivity before auto-settle"
+      aria-label={ariaLabel}
     />
   );
 }
@@ -2059,8 +2068,11 @@ export function GeneralSettingsPanel() {
                 title={searchableSetting("days-before-auto-settle").title}
                 description="Any new activity un-settles a thread automatically."
                 control={
-                  <AutoSettleDaysInput
+                  <IntegerSettingInput
                     value={settings.sidebarAutoSettleAfterDays}
+                    min={MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+                    max={MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS}
+                    ariaLabel="Days of inactivity before auto-settle"
                     onCommit={(days) => updateSettings({ sidebarAutoSettleAfterDays: days })}
                   />
                 }
@@ -2215,6 +2227,33 @@ export function GeneralSettingsPanel() {
                 updateSettings({ continueThreadsAfterServerUpdate: Boolean(checked) })
               }
               aria-label="Continue threads after server updates"
+            />
+          }
+        />
+
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("retained-server-runtimes")}
+          description="Each update of a background-service server installs a separate copy. Older copies beyond this count are removed when the service restarts."
+          resetAction={
+            settings.retainedServerRuntimes !== DEFAULT_UNIFIED_SETTINGS.retainedServerRuntimes ? (
+              <SettingResetButton
+                label="previous server runtimes to keep"
+                onClick={() =>
+                  updateSettings({
+                    retainedServerRuntimes: DEFAULT_UNIFIED_SETTINGS.retainedServerRuntimes,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <IntegerSettingInput
+              value={settings.retainedServerRuntimes}
+              min={MIN_RETAINED_SERVER_RUNTIMES}
+              max={MAX_RETAINED_SERVER_RUNTIMES}
+              ariaLabel="Previous server runtimes to keep"
+              onCommit={(count) => updateSettings({ retainedServerRuntimes: count })}
             />
           }
         />

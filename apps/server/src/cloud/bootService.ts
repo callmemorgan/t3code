@@ -20,7 +20,7 @@ import {
   pinnedRuntimePaths,
   PinnedRuntimeInstallError,
   type PinnedRuntimePruneResult,
-  prunePinnedRuntimes,
+  sweepPinnedRuntimes,
 } from "./pinnedRuntime.ts";
 import {
   SERVICE_LAUNCHER_FILE,
@@ -443,14 +443,10 @@ export class BootServicePruneStateError extends Schema.TaggedErrorClass<BootServ
 
 export class BootServicePruneError extends Schema.TaggedErrorClass<BootServicePruneError>()(
   "BootServicePruneError",
-  {
-    stage: Schema.Literals(["checking service state", "reading service state", "pruning runtimes"]),
-    path: Schema.String,
-    cause: Schema.Defect(),
-  },
+  { path: Schema.String, cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return `Could not prune T3 Code service runtimes while ${this.stage} at '${this.path}'.`;
+    return `Could not prune T3 Code service runtimes under '${this.path}'.`;
   }
 }
 
@@ -472,6 +468,8 @@ export interface BootServiceStatus {
 
 export interface BootServicePruneOptions {
   readonly dryRun: boolean;
+  /** Previous runtimes to keep beside the active one; the `retainedServerRuntimes` setting. */
+  readonly keep: number;
 }
 
 export type BootServicePruneResult = PinnedRuntimePruneResult;
@@ -801,52 +799,24 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
 
   const prune: BootService["Service"]["prune"] = Effect.fn("cloud.boot_service.prune")(
     function* (options) {
-      const stateExists = yield* fs.exists(statePath).pipe(
-        Effect.mapError(
-          (cause) =>
-            new BootServicePruneError({
-              stage: "checking service state",
-              path: statePath,
-              cause,
-            }),
-        ),
-      );
-      if (!stateExists) {
-        return yield* new BootServicePruneStateError({ statePath });
-      }
-      const stateText = yield* fs.readFileString(statePath).pipe(
-        Effect.mapError(
-          (cause) =>
-            new BootServicePruneError({
-              stage: "reading service state",
-              path: statePath,
-              cause,
-            }),
-        ),
-      );
-      const state = parseServiceState(stateText);
-      if (state === undefined) {
-        return yield* new BootServicePruneStateError({ statePath });
-      }
-      if (state.update?.status === "pending") {
-        return yield* new BootServiceUpdatePendingError();
-      }
-      return yield* prunePinnedRuntimes({
+      const result = yield* sweepPinnedRuntimes({
         baseDir: input.baseDir,
-        state,
+        keep: options.keep,
         dryRun: options.dryRun,
         fs,
         path,
       }).pipe(
         Effect.mapError(
           (cause) =>
-            new BootServicePruneError({
-              stage: "pruning runtimes",
-              path: path.dirname(runtimePaths.versionDir),
-              cause,
-            }),
+            new BootServicePruneError({ path: path.dirname(runtimePaths.versionDir), cause }),
         ),
       );
+      if (result.status === "skipped") {
+        return yield* result.reason === "update-pending"
+          ? new BootServiceUpdatePendingError()
+          : new BootServicePruneStateError({ statePath });
+      }
+      return { dryRun: result.dryRun, versions: result.versions };
     },
   );
 

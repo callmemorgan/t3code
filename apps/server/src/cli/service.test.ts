@@ -86,6 +86,7 @@ function makeTestService(serviceStatus: BootService.BootServiceStatus) {
         };
       }),
     uninstall: Effect.succeed(false),
+    prune: () => Effect.die("Service commands under test must not prune runtimes."),
   });
   return { service, installOptions };
 }
