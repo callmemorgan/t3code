@@ -6,6 +6,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Terminal from "effect/Terminal";
 import { Command } from "effect/unstable/cli";
 import { afterEach, vi } from "vite-plus/test";
@@ -72,6 +73,7 @@ const newerServiceStatus = { ...status, current: false, installedVersion: "999.0
 
 function makeTestService(serviceStatus: BootService.BootServiceStatus) {
   const installOptions: Array<Parameters<BootService.BootService["Service"]["install"]>[0]> = [];
+  const pruneOptions: Array<BootService.BootServicePruneOptions> = [];
   const service = BootService.BootService.of({
     status: Effect.succeed(serviceStatus),
     install: (options) =>
@@ -86,9 +88,13 @@ function makeTestService(serviceStatus: BootService.BootServiceStatus) {
         };
       }),
     uninstall: Effect.succeed(false),
-    prune: () => Effect.die("Service commands under test must not prune runtimes."),
+    prune: (options) =>
+      Effect.sync(() => {
+        pruneOptions.push(options);
+        return { dryRun: options.dryRun, versions: [] };
+      }),
   });
-  return { service, installOptions };
+  return { service, installOptions, pruneOptions };
 }
 
 it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands", (it) => {
@@ -120,6 +126,37 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands
         });
         expect(installOptions).toEqual([]);
       }),
+  );
+
+  it.effect.each([
+    { name: "the settings file", settings: '{ "retainedServerRuntimes": 5 }', keep: 5 },
+    { name: "the default when there is no settings file", settings: undefined, keep: 2 },
+  ])("prune keeps the count from $name", ({ settings, keep }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-cli-test-" });
+      if (settings !== undefined) {
+        yield* fs.makeDirectory(path.join(baseDir, "userdata"), { recursive: true });
+        yield* fs.writeFileString(path.join(baseDir, "userdata", "settings.json"), settings);
+      }
+      const { service, pruneOptions } = makeTestService(status);
+      vi.spyOn(BootService, "layer").mockReturnValue(
+        Layer.succeed(BootService.BootService, service),
+      );
+
+      yield* Command.runWith(serviceCommand, { version: packageJson.version })([
+        "prune",
+        "--dry-run",
+        "--base-dir",
+        baseDir,
+      ]).pipe(
+        Effect.provideService(HostProcessEnvironment, {}),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+      );
+
+      expect(pruneOptions).toEqual([{ dryRun: true, keep }]);
+    }),
   );
 
   it.effect.each(["install", "update"] as const)("%s allows an explicit downgrade", (command) =>

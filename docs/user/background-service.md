@@ -62,8 +62,8 @@ If a remote update is already in progress, wait for it to finish before retrying
 Each update installs a separate copy of T3 Code, and the service cleans up after itself: once an
 update finishes, it keeps the active version plus the two before it and removes older copies. Change
 that count under **Settings** → **General** → **Previous server runtimes to keep**. `service prune`
-applies the same count by hand without restarting the service, and it waits until any update in
-progress has finished.
+applies the same count by hand without restarting the service. It refuses to run while an update is
+in progress, so retry it once the update has finished.
 
 The service runs a small stable launcher. Exact T3 Code versions are installed separately, so a
 failed remote candidate can return to the previous version without rewriting the service

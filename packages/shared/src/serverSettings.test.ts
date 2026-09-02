@@ -5,6 +5,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
+import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySettings.ts";
 import { createModelSelection } from "./model.ts";
@@ -14,10 +15,25 @@ import {
   isModelSelectionProviderEnabled,
   normalizePersistedServerSettingString,
   parsePersistedServerObservabilitySettings,
+  parsePersistedServerSettings,
   resolveSourceControlWriterModelSelection,
 } from "./serverSettings.ts";
 
 describe("serverSettings helpers", () => {
+  it("parses a persisted settings file with defaults, or none when it is unusable", () => {
+    expect(parsePersistedServerSettings("")).toEqual(Option.none());
+    expect(parsePersistedServerSettings("{ not json")).toEqual(Option.none());
+    expect(parsePersistedServerSettings('{"retainedServerRuntimes": 0}')).toEqual(Option.none());
+    const parsed = parsePersistedServerSettings('{"retainedServerRuntimes": 5}');
+    expect(Option.isSome(parsed)).toBe(true);
+    if (Option.isSome(parsed)) {
+      expect(parsed.value.retainedServerRuntimes).toBe(5);
+      expect(parsed.value.enableProviderUpdateChecks).toBe(
+        DEFAULT_SERVER_SETTINGS.enableProviderUpdateChecks,
+      );
+    }
+  });
+
   it("normalizes optional persisted strings", () => {
     expect(normalizePersistedServerSettingString(undefined)).toBeUndefined();
     expect(normalizePersistedServerSettingString("   ")).toBeUndefined();
