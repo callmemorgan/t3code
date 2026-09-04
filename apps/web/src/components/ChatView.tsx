@@ -6868,14 +6868,21 @@ function ChatViewContent(props: ChatViewProps) {
           clearedComposerDraftContentSnapshot,
         );
       if (restoredDraft) {
-        promptRef.current = promptForSend;
-        composerImagesRef.current = retryComposerImages;
-        composerFilesRef.current = composerFilesSnapshot;
-        composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
-        composerElementContextsRef.current = composerElementContextsSnapshot;
+        // The restore merged the sent content with whatever the user added
+        // during the send, so read the result back instead of assuming the
+        // snapshot.
+        const restoredContent = useComposerDraftStore
+          .getState()
+          .captureComposerDraftContent(composerDraftTarget);
+        const restoredPrompt = restoredContent.prompt;
+        promptRef.current = restoredPrompt;
+        composerImagesRef.current = restoredContent.images;
+        composerFilesRef.current = restoredContent.files;
+        composerTerminalContextsRef.current = restoredContent.terminalContexts;
+        composerElementContextsRef.current = restoredContent.elementContexts;
         composerRef.current?.resetCursorState({
-          cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
-          prompt: promptForSend,
+          cursor: collapseExpandedComposerCursor(restoredPrompt, restoredPrompt.length),
+          prompt: restoredPrompt,
           detectTrigger: true,
         });
       }

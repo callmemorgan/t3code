@@ -2609,6 +2609,25 @@ describe("composerDraftStore response annotations", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
   });
 
+  it("restores a failed send in front of edits made while it was in flight", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "send this");
+    const sentAnnotation = makeResponseAnnotation({ id: "sent-annotation" });
+    store.addResponseAnnotation(threadRef, sentAnnotation);
+    const sent = store.captureComposerDraftContent(threadRef);
+
+    store.setPrompt(threadRef, "send this and also this");
+    const laterAnnotation = makeResponseAnnotation({ id: "later-annotation", comment: "later" });
+    store.addResponseAnnotation(threadRef, laterAnnotation);
+    store.consumeComposerDraftContent(threadRef, sent);
+    const afterConsume = store.captureComposerDraftContent(threadRef);
+
+    expect(store.restoreComposerDraftContentIfUnchanged(threadRef, sent, afterConsume)).toBe(true);
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.prompt).toBe("send this and also this");
+    expect(draft?.responseAnnotations).toEqual([sentAnnotation, laterAnnotation]);
+  });
+
   it("keeps source-bound annotations when clearing stash-transferable content", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(threadRef, "follow up");

@@ -704,8 +704,10 @@ interface ComposerDraftStoreState {
   /** Snapshot only sendable content for an optimistic turn. */
   captureComposerDraftContent: (threadRef: ComposerThreadTarget) => ComposerDraftContentSnapshot;
   /**
-   * Restore a failed send only while the draft still equals `expectedCurrent`.
-   * Returns false when the user edited the composer in the meantime.
+   * Restore a failed send only while the draft still equals `expectedCurrent`,
+   * the state consuming that send left behind. The sent content is merged back
+   * in front of what survived the consume, so an edit made during the send is
+   * kept. Returns false when the user edited the composer in the meantime.
    */
   restoreComposerDraftContentIfUnchanged: (
     threadRef: ComposerThreadTarget,
@@ -966,6 +968,17 @@ function withoutSentItems<T>(current: ReadonlyArray<T>, sent: ReadonlyArray<T>):
     const id = draftItemId(item);
     return id !== null ? !sentIds.has(id) : !sent.includes(item);
   });
+}
+
+/** Puts sent items back ahead of anything added since, without duplicates. */
+function withSentItemsFirst<T>(sent: ReadonlyArray<T>, current: ReadonlyArray<T>): T[] {
+  return [...sent, ...withoutSentItems(current, sent)];
+}
+
+function joinPrompts(sent: string, remaining: string): string {
+  if (remaining.length === 0) return sent;
+  if (sent.length === 0) return remaining;
+  return `${sent} ${remaining}`;
 }
 
 function promptWithoutSentText(current: string, sent: string): string {
@@ -3979,16 +3992,33 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const base = current ?? createEmptyThreadDraft();
             const nextDraft: ComposerThreadDraftState = {
               ...base,
-              prompt: snapshot.prompt,
-              images: [...snapshot.images],
-              files: [...snapshot.files],
-              nonPersistedImageIds: [...snapshot.nonPersistedImageIds],
-              persistedAttachments: [...snapshot.persistedAttachments],
-              terminalContexts: [...snapshot.terminalContexts],
-              elementContexts: [...snapshot.elementContexts],
-              previewAnnotations: [...snapshot.previewAnnotations],
-              responseAnnotations: [...snapshot.responseAnnotations],
-              reviewComments: [...snapshot.reviewComments],
+              prompt: joinPrompts(snapshot.prompt, base.prompt),
+              images: withSentItemsFirst(snapshot.images, base.images),
+              files: withSentItemsFirst(snapshot.files, base.files),
+              nonPersistedImageIds: [
+                ...snapshot.nonPersistedImageIds,
+                ...base.nonPersistedImageIds.filter(
+                  (id) => !snapshot.nonPersistedImageIds.includes(id),
+                ),
+              ],
+              persistedAttachments: withSentItemsFirst(
+                snapshot.persistedAttachments,
+                base.persistedAttachments,
+              ),
+              terminalContexts: withSentItemsFirst(
+                snapshot.terminalContexts,
+                base.terminalContexts,
+              ),
+              elementContexts: withSentItemsFirst(snapshot.elementContexts, base.elementContexts),
+              previewAnnotations: withSentItemsFirst(
+                snapshot.previewAnnotations,
+                base.previewAnnotations,
+              ),
+              responseAnnotations: withSentItemsFirst(
+                snapshot.responseAnnotations,
+                base.responseAnnotations,
+              ),
+              reviewComments: withSentItemsFirst(snapshot.reviewComments, base.reviewComments),
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
