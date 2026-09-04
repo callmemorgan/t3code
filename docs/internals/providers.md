@@ -341,12 +341,15 @@ rendered as a noninteractive label.
 The initiating user message is persisted before the provider has assigned a turn ID. After
 `ProviderService.sendTurn` returns, `ProviderCommandReactor` dispatches the server-only
 `thread.response-annotations.bind-turn` command. Its decider re-emits the existing
-`thread.message-sent` event shape with the provider's exact `turnId`, so older clients can ignore the
-update safely. The projector, SQLite projection, and client reducer update the existing user message,
-and turn projection reconciliation prefers this bound message over the thread-local pending-start
-fallback. Clients do not resolve directives for an unbound message; they may still show its sent
-annotation summary. This prevents overlapping or reversed provider starts from borrowing another
-message's annotations without adding a new event type or database column.
+`thread.message-sent` event shape with the provider's exact `turnId`, so older clients can ignore
+the update safely. The projector, SQLite projection, and client reducer update the existing user
+message, and turn projection reconciliation prefers this bound message over the thread-local
+pending-start fallback. Clients do not resolve directives for an unbound message; they may still
+show its sent annotation summary. Web and mobile derive that binding with the shared selector in
+`packages/client-runtime/src/state/responseAnnotations.ts`, which reuses its result while only
+assistant messages change so streaming deltas do not repaint the timeline. This prevents overlapping
+or reversed provider starts from borrowing another message's annotations without adding a new event
+type or database column.
 
 Annotations belong to their thread. A turn that creates a new thread must reject annotation
 metadata, and moving prompt text to another project does not move its annotations. The server

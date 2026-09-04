@@ -143,10 +143,6 @@
       "types": "./src/state/responseAnnotations.ts",
       "default": "./src/state/responseAnnotations.ts"
     },
-    "./state/responseAnnotations": {
-      "types": "./src/state/responseAnnotations.ts",
-      "default": "./src/state/responseAnnotations.ts"
-    },
     "./state/review": {
       "types": "./src/state/review.ts",
       "default": "./src/state/review.ts"

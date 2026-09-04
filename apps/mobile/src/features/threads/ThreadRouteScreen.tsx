@@ -7,7 +7,12 @@ import {
 } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
-import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type OrchestrationMessage,
+  type ProjectScript,
+} from "@t3tools/contracts";
 import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
@@ -82,6 +87,9 @@ interface ThreadInspectorSelection {
 }
 
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
+
+/** Stable identity so an unloaded thread detail cannot churn the feed. */
+const EMPTY_THREAD_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
 
 function InspectorPaneRoleActivation() {
   useAdaptiveWorkspacePaneRole("inspector");
@@ -774,6 +782,7 @@ function ThreadRouteContent(
           connectionError={routeConnectionError}
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
           selectedThreadFeed={composer.selectedThreadFeed}
+          selectedThreadMessages={selectedThreadDetail?.messages ?? EMPTY_THREAD_MESSAGES}
           activeWorkStartedAt={composer.activeWorkStartedAt}
           isCompacting={composer.isCompacting}
           activePendingApproval={requests.activePendingApproval}

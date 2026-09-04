@@ -9,6 +9,7 @@ import {
   expandAssistantCitationsForProvider,
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
+import { formatResponseAnnotationPrompt } from "@t3tools/shared/responseAnnotations";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { submitComposerDraft } from "./composerSubmission";
@@ -121,6 +122,42 @@ describe("submitComposerDraft", () => {
 
     expect(result).toEqual({ validationMessage: null, didDispatch: false });
     expect(preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("counts the response annotation envelope against the shared limit", () => {
+    const onSend = vi.fn();
+    const annotations = [
+      { selectedText: "y".repeat(2_000), comment: "Explain this claim." },
+    ] as const;
+    // Under the limit on its own, over it once the server's envelope wraps it.
+    const prompt = "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 1_000);
+    const expectedLength = formatResponseAnnotationPrompt(prompt, annotations)?.length ?? 0;
+    expect(expectedLength).toBeGreaterThan(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+
+    const preventDefault = vi.fn();
+    const result = submitComposerDraft({
+      prompt,
+      responseAnnotations: annotations,
+      submissionTarget: "provider-turn",
+      event: { preventDefault },
+      onSend,
+    });
+
+    expect(result.didDispatch).toBe(false);
+    expect(result.validationMessage).toContain(
+      `${(expectedLength - PROVIDER_SEND_TURN_MAX_INPUT_CHARS).toLocaleString("en-US")} characters over`,
+    );
+    expect(onSend).not.toHaveBeenCalled();
+    expect(preventDefault).toHaveBeenCalledOnce();
+
+    expect(
+      submitComposerDraft({
+        prompt,
+        submissionTarget: "provider-turn",
+        event: undefined,
+        onSend,
+      }),
+    ).toEqual({ validationMessage: null, didDispatch: true });
   });
 
   it("allows fully composed provider input at the shared character limit", () => {

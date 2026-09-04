@@ -55,11 +55,10 @@ export interface ResponseAnnotationNavigationRequest {
   readonly number?: number;
 }
 
-/** A source marker keeps its originating message's number and editability. */
+/** A source marker keeps its originating message's display number. */
 export interface ResponseAnnotationSourceMarker {
   readonly annotation: ResponseAnnotation;
   readonly number: number;
-  readonly editable: boolean;
 }
 
 export interface ResponseAnnotationTimelineControllerProps {
@@ -284,14 +283,6 @@ export function responseAnnotationEditorPosition(
   };
 }
 
-export function responseAnnotationEditorPresentation(number: number, editable: boolean) {
-  return {
-    ariaLabel: `${editable ? "Edit" : "View"} Annotation ${number}`,
-    closeLabel: editable ? "Cancel" : "Close",
-    readOnly: !editable,
-  } as const;
-}
-
 export function responseAnnotationTooltipContent(annotation: ResponseAnnotation, number: number) {
   const comment = annotation.comment.trim();
   return {
@@ -309,6 +300,25 @@ function rangeClientRects(range: Range): ResponseAnnotationFloatingRect[] {
   if (usableRects.length > 0) return usableRects.map(responseAnnotationRectFromDomRect);
   const rect = range.getBoundingClientRect();
   return rect.width > 0 || rect.height > 0 ? [responseAnnotationRectFromDomRect(rect)] : [];
+}
+
+function floatingRectsEqual(
+  left: ReadonlyArray<ResponseAnnotationFloatingRect>,
+  right: ReadonlyArray<ResponseAnnotationFloatingRect>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((rect, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        rect.top === other.top &&
+        rect.left === other.left &&
+        rect.width === other.width &&
+        rect.height === other.height
+      );
+    })
+  );
 }
 
 function findSourceElement(
@@ -365,8 +375,7 @@ export function ResponseAnnotationSourceMarkers({
   readonly markers: ReadonlyArray<ResponseAnnotationSourceMarker>;
   readonly sourceMessageId: MessageId;
 }) {
-  const { onMarkerLayout, onMarkerSelect, onResponseAnnotationClick } =
-    useResponseAnnotationTimelineContext();
+  const { onMarkerLayout, onMarkerSelect } = useResponseAnnotationTimelineContext();
   const sourceRef = useRef<HTMLDivElement | null>(null);
   const [placements, setPlacements] = useState<ReadonlyArray<ResponseAnnotationMarkerPlacement>>(
     [],
@@ -437,7 +446,7 @@ export function ResponseAnnotationSourceMarkers({
       aria-label={markers.length > 0 ? "Response annotations" : undefined}
     >
       {markers.map((marker, index) => {
-        const { annotation, number, editable } = marker;
+        const { annotation, number } = marker;
         const placement = placements.find((candidate) => candidate.annotation.id === annotation.id);
         const tooltip = responseAnnotationTooltipContent(annotation, number);
         return (
@@ -455,15 +464,9 @@ export function ResponseAnnotationSourceMarkers({
                       : { right: 0, top: 20 + index * 24 }
                   }
                   data-response-annotation-marker={annotation.id}
-                  data-response-annotation-marker-editable={editable ? "true" : "false"}
-                  aria-label={
-                    editable
-                      ? `Edit Annotation ${number}`
-                      : `Annotation ${number}: ${tooltip.description}`
-                  }
+                  aria-label={`Edit Annotation ${number}`}
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
-                    if (!editable) onResponseAnnotationClick(annotation, number);
                     onMarkerSelect(marker, event.currentTarget.getBoundingClientRect());
                   }}
                 >
@@ -534,7 +537,6 @@ function ResponseAnnotationSelectionAction({
 function ResponseAnnotationEditor({
   annotation,
   number,
-  editable,
   anchorRect,
   onCancel,
   onDelete,
@@ -542,15 +544,13 @@ function ResponseAnnotationEditor({
 }: {
   readonly annotation: ResponseAnnotation;
   readonly number: number;
-  readonly editable: boolean;
   readonly anchorRect: ResponseAnnotationFloatingRect;
   readonly onCancel: () => void;
-  readonly onDelete?: (() => void) | undefined;
-  readonly onSave?: ((comment: string) => void) | undefined;
+  readonly onDelete: () => void;
+  readonly onSave: (comment: string) => void;
 }) {
   const [comment, setComment] = useState(annotation.comment);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const presentation = responseAnnotationEditorPresentation(number, editable);
   const position = responseAnnotationEditorPosition(anchorRect, {
     width: typeof window === "undefined" ? 1024 : window.innerWidth,
     height: typeof window === "undefined" ? 768 : window.innerHeight,
@@ -567,7 +567,7 @@ function ResponseAnnotationEditor({
       className="fixed z-[72] flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border/80 bg-popover p-3 text-popover-foreground shadow-xl"
       style={position}
       data-response-annotation-ui="true"
-      aria-label={presentation.ariaLabel}
+      aria-label={`Edit Annotation ${number}`}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
@@ -577,7 +577,7 @@ function ResponseAnnotationEditor({
       }}
       onSubmit={(event) => {
         event.preventDefault();
-        if (editable && onSave && comment !== annotation.comment) onSave(comment);
+        if (comment !== annotation.comment) onSave(comment);
       }}
     >
       <textarea
@@ -585,35 +585,28 @@ function ResponseAnnotationEditor({
         value={comment}
         maxLength={RESPONSE_ANNOTATION_MAX_COMMENT_CHARS}
         aria-label="Annotation comment"
-        readOnly={presentation.readOnly}
-        placeholder={editable ? "Add an optional comment..." : "No comment"}
+        placeholder="Add an optional comment..."
         className="min-h-0 w-full flex-1 resize-none overflow-y-auto rounded-lg border border-border/70 bg-background/70 p-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onChange={(event) => setComment(event.target.value)}
       />
       <div className="mt-2 flex shrink-0 items-center justify-between gap-2">
-        {editable && onDelete ? (
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="text-muted-foreground hover:text-destructive"
-            aria-label="Delete annotation"
-            onClick={onDelete}
-          >
-            <Trash2Icon aria-hidden />
-          </Button>
-        ) : (
-          <span />
-        )}
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="text-muted-foreground hover:text-destructive"
+          aria-label="Delete annotation"
+          onClick={onDelete}
+        >
+          <Trash2Icon aria-hidden />
+        </Button>
         <div className="flex items-center gap-2">
           <Button type="button" size="sm" variant="outline" onClick={onCancel}>
-            {presentation.closeLabel}
+            Cancel
           </Button>
-          {editable ? (
-            <Button type="submit" size="sm" disabled={comment === annotation.comment}>
-              Save
-            </Button>
-          ) : null}
+          <Button type="submit" size="sm" disabled={comment === annotation.comment}>
+            Save
+          </Button>
         </div>
       </div>
     </form>,
@@ -685,7 +678,6 @@ export function ResponseAnnotationTimelineController({
   const editorRef = useRef<{
     readonly annotation: ResponseAnnotation;
     readonly number: number;
-    readonly editable: boolean;
     readonly anchorRect: ResponseAnnotationFloatingRect;
   } | null>(null);
   const pointerControllerRef = useRef<AbortController | null>(null);
@@ -703,7 +695,6 @@ export function ResponseAnnotationTimelineController({
   const [editor, setEditor] = useState<{
     readonly annotation: ResponseAnnotation;
     readonly number: number;
-    readonly editable: boolean;
     readonly anchorRect: ResponseAnnotationFloatingRect;
   } | null>(null);
   const [optimisticAnnotations, setOptimisticAnnotations] = useState<
@@ -719,7 +710,10 @@ export function ResponseAnnotationTimelineController({
     readonly showMarker: boolean;
   } | null>(null);
   const previousDraftAnnotationsRef = useRef<ReadonlyArray<ResponseAnnotation>>(draftAnnotations);
-  const floatingUiOpen = selection !== null || editor !== null;
+  const historicalJumpRef = useRef(historicalJump);
+  // The historical highlight is a fixed-position overlay over rects captured
+  // once, so it must track the viewport for as long as it is on screen.
+  const floatingRectsActive = selection !== null || editor !== null || historicalJump !== null;
 
   const stopNavigationObservation = useCallback(() => {
     navigationObserverRef.current?.disconnect();
@@ -729,6 +723,10 @@ export function ResponseAnnotationTimelineController({
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
+
+  useEffect(() => {
+    historicalJumpRef.current = historicalJump;
+  }, [historicalJump]);
 
   useEffect(() => {
     if (optimisticAnnotations.length === 0 || draftAnnotations.length === 0) return;
@@ -780,7 +778,7 @@ export function ResponseAnnotationTimelineController({
       const number = numberByAnnotationId.get(annotation.id);
       if (number === undefined) continue;
       const existing = byMessageId.get(annotation.sourceMessageId) ?? [];
-      existing.push({ annotation, number, editable: true });
+      existing.push({ annotation, number });
       byMessageId.set(annotation.sourceMessageId, existing);
     }
 
@@ -847,6 +845,29 @@ export function ResponseAnnotationTimelineController({
         );
       }
     }
+
+    const currentHistorical = historicalJumpRef.current;
+    if (currentHistorical) {
+      const source = findSourceElement(currentHistorical.annotation, timelineRootRef.current);
+      const markdownRoot = source ? sourceMarkdownRoot(source) : null;
+      const range = markdownRoot
+        ? domRangeForResponseAnnotation(
+            markdownRoot,
+            currentHistorical.annotation.selectedText,
+            currentHistorical.annotation.sourceRange,
+          )
+        : null;
+      const rects = range ? rangeClientRects(range) : [];
+      if (rects.length > 0) {
+        setHistoricalJump((existing) =>
+          existing &&
+          existing.annotation.id === currentHistorical.annotation.id &&
+          !floatingRectsEqual(existing.rects, rects)
+            ? { ...existing, rects }
+            : existing,
+        );
+      }
+    }
   }, []);
 
   const scheduleRefreshFloatingRects = useCallback(() => {
@@ -865,7 +886,7 @@ export function ResponseAnnotationTimelineController({
   }, [scheduleReadTextSelection, supported]);
 
   useEffect(() => {
-    if (!floatingUiOpen) return;
+    if (!floatingRectsActive) return;
     const onViewportChange = () => scheduleRefreshFloatingRects();
     window.addEventListener("resize", onViewportChange);
     window.addEventListener("scroll", onViewportChange, true);
@@ -873,7 +894,7 @@ export function ResponseAnnotationTimelineController({
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("scroll", onViewportChange, true);
     };
-  }, [floatingUiOpen, scheduleRefreshFloatingRects]);
+  }, [floatingRectsActive, scheduleRefreshFloatingRects]);
 
   useEffect(
     () => () => {
@@ -960,7 +981,6 @@ export function ResponseAnnotationTimelineController({
     setEditor({
       annotation,
       number: effectiveAnnotations.length + 1,
-      editable: true,
       anchorRect: current.rect,
     });
   }, [effectiveAnnotations.length, onCreateResponseAnnotation]);
@@ -1199,15 +1219,13 @@ export function ResponseAnnotationTimelineController({
   );
 
   const editorAnnotation = editor
-    ? editor.editable
-      ? (effectiveAnnotations.find((annotation) => annotation.id === editor.annotation.id) ??
-        editor.annotation)
-      : editor.annotation
+    ? (effectiveAnnotations.find((annotation) => annotation.id === editor.annotation.id) ??
+      editor.annotation)
     : null;
 
   useEffect(() => {
     if (
-      editor?.editable === true &&
+      editor &&
       !effectiveAnnotations.some((annotation) => annotation.id === editor.annotation.id)
     ) {
       setEditor(null);
@@ -1234,46 +1252,31 @@ export function ResponseAnnotationTimelineController({
       {editor && editorAnnotation ? (
         <ResponseAnnotationEditor
           annotation={editorAnnotation}
-          number={
-            editor.editable
-              ? (numberByAnnotationId.get(editorAnnotation.id) ?? editor.number)
-              : editor.number
-          }
-          editable={editor.editable}
+          number={numberByAnnotationId.get(editorAnnotation.id) ?? editor.number}
           anchorRect={editor.anchorRect}
           onCancel={() => closeEditor(editorAnnotation.id)}
-          onDelete={
-            editor.editable
-              ? () => {
-                  onDeleteResponseAnnotation?.(editorAnnotation.id);
-                  setDeletedAnnotationIds((existing) => {
-                    const next = new Set(existing);
-                    next.add(editorAnnotation.id);
-                    return next;
-                  });
-                  setOptimisticAnnotations((existing) =>
-                    existing.filter((annotation) => annotation.id !== editorAnnotation.id),
-                  );
-                  setEditor(null);
-                  restoreSourceFocus(editorAnnotation);
-                }
-              : undefined
-          }
-          onSave={
-            editor.editable
-              ? (comment) => {
-                  onUpdateResponseAnnotation?.(editorAnnotation.id, comment);
-                  setOptimisticAnnotations((existing) =>
-                    existing.map((annotation) =>
-                      annotation.id === editorAnnotation.id
-                        ? { ...annotation, comment }
-                        : annotation,
-                    ),
-                  );
-                  closeEditor(editorAnnotation.id);
-                }
-              : undefined
-          }
+          onDelete={() => {
+            onDeleteResponseAnnotation?.(editorAnnotation.id);
+            setDeletedAnnotationIds((existing) => {
+              const next = new Set(existing);
+              next.add(editorAnnotation.id);
+              return next;
+            });
+            setOptimisticAnnotations((existing) =>
+              existing.filter((annotation) => annotation.id !== editorAnnotation.id),
+            );
+            setEditor(null);
+            restoreSourceFocus(editorAnnotation);
+          }}
+          onSave={(comment) => {
+            onUpdateResponseAnnotation?.(editorAnnotation.id, comment);
+            setOptimisticAnnotations((existing) =>
+              existing.map((annotation) =>
+                annotation.id === editorAnnotation.id ? { ...annotation, comment } : annotation,
+              ),
+            );
+            closeEditor(editorAnnotation.id);
+          }}
         />
       ) : null}
       {historicalJump ? (

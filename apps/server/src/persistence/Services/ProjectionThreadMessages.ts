@@ -53,6 +53,13 @@ export const GetProjectionThreadMessageInput = Schema.Struct({
 });
 export type GetProjectionThreadMessageInput = typeof GetProjectionThreadMessageInput.Type;
 
+export const GetProjectionThreadUserMessageByTurnInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+});
+export type GetProjectionThreadUserMessageByTurnInput =
+  typeof GetProjectionThreadUserMessageByTurnInput.Type;
+
 export const DeleteProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -81,6 +88,14 @@ export interface ProjectionThreadMessageRepositoryShape {
    */
   readonly getByMessageId: (
     input: GetProjectionThreadMessageInput,
+  ) => Effect.Effect<Option.Option<ProjectionThreadMessage>, ProjectionRepositoryError>;
+
+  /**
+   * Read the user message bound to a provider turn, if the server has bound
+   * one. Turn projection uses this instead of hydrating the thread's history.
+   */
+  readonly getUserMessageByTurnId: (
+    input: GetProjectionThreadUserMessageByTurnInput,
   ) => Effect.Effect<Option.Option<ProjectionThreadMessage>, ProjectionRepositoryError>;
 
   /**

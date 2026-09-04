@@ -159,8 +159,54 @@ function isEscaped(markdown: string, offset: number): boolean {
 }
 
 /**
- * Replaces Codex response-annotation directives in Markdown prose. Inline code
- * and fenced code are copied byte-for-byte so examples remain examples.
+ * Opens an indented code block after a blank line. Deliberately line-based, like
+ * the fence handling: a 4-space list continuation paragraph reads as code here,
+ * which only costs a directive its link.
+ */
+const INDENTED_CODE_PATTERN = /^(?: {4}|\t)/;
+
+/**
+ * Offset just past the same-line inline link that starts at `offset`, or -1 when
+ * the text is not a complete `[label](destination)`. Directives inside a link
+ * are copied verbatim: rewriting one to a link would nest links.
+ */
+function inlineLinkEnd(markdown: string, offset: number): number {
+  let cursor = offset + 1;
+  let depth = 1;
+  while (cursor < markdown.length && markdown[cursor] !== "\n") {
+    const character = markdown[cursor];
+    if (!isEscaped(markdown, cursor)) {
+      if (character === "[") {
+        depth += 1;
+      } else if (character === "]") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    cursor += 1;
+  }
+  if (depth !== 0 || markdown[cursor] !== "]" || markdown[cursor + 1] !== "(") return -1;
+  cursor += 2;
+  let parens = 1;
+  while (cursor < markdown.length && markdown[cursor] !== "\n") {
+    const character = markdown[cursor];
+    if (!isEscaped(markdown, cursor)) {
+      if (character === "(") {
+        parens += 1;
+      } else if (character === ")") {
+        parens -= 1;
+        if (parens === 0) return cursor + 1;
+      }
+    }
+    cursor += 1;
+  }
+  return -1;
+}
+
+/**
+ * Replaces Codex response-annotation directives in Markdown prose. Inline code,
+ * fenced code, indented code, and inline links are copied byte-for-byte so
+ * examples remain examples and links do not nest.
  */
 export function replaceResponseAnnotationDirectives(
   markdown: string,
@@ -170,6 +216,10 @@ export function replaceResponseAnnotationDirectives(
   let cursor = 0;
   let lineStart = true;
   let fence: { readonly character: "`" | "~"; readonly length: number } | null = null;
+  // The start of the document opens an indented code block the same way a blank
+  // line does.
+  let previousLineBlank = true;
+  let indentedCode = false;
 
   while (cursor < markdown.length) {
     if (lineStart) {
@@ -179,14 +229,39 @@ export function replaceResponseAnnotationDirectives(
         output += markdown.slice(cursor, end);
         cursor = end;
         lineStart = true;
+        previousLineBlank = false;
         if (closing) fence = null;
         continue;
       }
+
+      const end = lineEnd(markdown, cursor);
+      const line = markdown.slice(cursor, end);
+      const blank = line.trim().length === 0;
+      const indented = INDENTED_CODE_PATTERN.test(line);
+      if (indentedCode) {
+        // A blank line does not close the block; the next less-indented line does.
+        if (blank || indented) {
+          output += line;
+          cursor = end;
+          lineStart = true;
+          previousLineBlank = blank;
+          continue;
+        }
+        indentedCode = false;
+      } else if (indented && previousLineBlank) {
+        indentedCode = true;
+        output += line;
+        cursor = end;
+        lineStart = true;
+        previousLineBlank = blank;
+        continue;
+      }
+      previousLineBlank = blank;
+
       const opening = fenceAtLineStart(markdown, cursor);
       if (opening) {
         fence = opening;
-        const end = lineEnd(markdown, cursor);
-        output += markdown.slice(cursor, end);
+        output += line;
         cursor = end;
         lineStart = true;
         continue;
@@ -202,6 +277,16 @@ export function replaceResponseAnnotationDirectives(
         output += markdown.slice(cursor, end);
         lineStart = markdown[end - 1] === "\n";
         cursor = end;
+        continue;
+      }
+    }
+
+    if (character === "[" && !isEscaped(markdown, cursor)) {
+      const linkEnd = inlineLinkEnd(markdown, cursor);
+      if (linkEnd !== -1) {
+        output += markdown.slice(cursor, linkEnd);
+        cursor = linkEnd;
+        lineStart = false;
         continue;
       }
     }

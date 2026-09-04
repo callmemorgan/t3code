@@ -99,12 +99,8 @@ export interface ProjectionSnapshotQueryShape {
    * Read which candidate message ids are completed assistant messages owned
    * by a thread. This intentionally returns only the requested ids so
    * annotated turn validation does not hydrate the thread's message history.
-   *
-   * Optional keeps lightweight test implementations source-compatible; the
-   * production snapshot query provides it and the engine fails closed when
-   * it is unavailable for an annotated turn.
    */
-  readonly getAssistantMessageIds?: (
+  readonly getAssistantMessageIds: (
     input: AssistantMessageIdsLookup,
   ) => Effect.Effect<ReadonlyArray<MessageId>, ProjectionRepositoryError>;
 

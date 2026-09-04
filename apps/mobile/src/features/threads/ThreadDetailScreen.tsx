@@ -13,6 +13,7 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
+  OrchestrationMessage,
   OrchestrationThreadShell,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -99,6 +100,8 @@ export interface ThreadDetailScreenProps {
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  /** Loaded thread messages; the feed's annotation turn binding reads these. */
+  readonly selectedThreadMessages: ReadonlyArray<OrchestrationMessage>;
   readonly activeWorkStartedAt: string | null;
   readonly isCompacting: boolean;
   readonly activePendingApproval: PendingApproval | null;
@@ -721,6 +724,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             threadId={props.selectedThread.id}
             workspaceRoot={props.threadCwd}
             feed={props.selectedThreadFeed}
+            messages={props.selectedThreadMessages}
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}
             latestTurn={props.selectedThread.latestTurn}

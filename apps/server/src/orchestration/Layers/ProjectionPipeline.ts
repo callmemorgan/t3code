@@ -1405,11 +1405,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           // over the one-slot pending-start fallback. The fallback is still
           // useful for legacy/unannotated starts, but must not donate its
           // source-plan metadata to a different bound message.
-          const projectedMessages = yield* projectionThreadMessageRepository.listByThreadId({
-            threadId: event.payload.threadId,
-          });
-          const boundUserMessage = projectedMessages.find(
-            (message) => message.role === "user" && message.turnId === turnId,
+          const boundUserMessage = Option.getOrUndefined(
+            yield* projectionThreadMessageRepository.getUserMessageByTurnId({
+              threadId: event.payload.threadId,
+              turnId,
+            }),
           );
           const exactPendingTurnStart =
             Option.isSome(pendingTurnStart) &&

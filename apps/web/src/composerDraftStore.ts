@@ -433,24 +433,6 @@ export function composerDraftContentEqual(
   );
 }
 
-function composerDraftEditableContentEqual(
-  left: ComposerDraftContentSnapshot,
-  right: ComposerDraftContentSnapshot,
-): boolean {
-  // Persistence bookkeeping can finish while an image upload is in flight;
-  // the image list itself is the editable state that identifies a new image.
-  return (
-    left.prompt === right.prompt &&
-    arraysEqualByReferenceOrValue(left.images, right.images) &&
-    arraysEqualByReferenceOrValue(left.files, right.files) &&
-    arraysEqualByReferenceOrValue(left.terminalContexts, right.terminalContexts) &&
-    arraysEqualByReferenceOrValue(left.elementContexts, right.elementContexts) &&
-    arraysEqualByReferenceOrValue(left.previewAnnotations, right.previewAnnotations) &&
-    arraysEqualByReferenceOrValue(left.responseAnnotations, right.responseAnnotations) &&
-    arraysEqualByReferenceOrValue(left.reviewComments, right.reviewComments)
-  );
-}
-
 /**
  * True when the user has invested real content in the draft: typed text or
  * any attachment/context. Model selection and mode choices alone do not
@@ -729,15 +711,6 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     snapshot: ComposerDraftContentSnapshot,
     expectedCurrent?: ComposerDraftContentSnapshot,
-  ) => boolean;
-  /**
-   * Consume composer content only while its editable fields still match the
-   * snapshot captured before an asynchronous send step. Returns false when
-   * the user edited the composer in the meantime.
-   */
-  clearComposerContentIfUnchanged: (
-    threadRef: ComposerThreadTarget,
-    expectedCurrent: ComposerDraftContentSnapshot,
   ) => boolean;
   addReviewComment: (threadRef: ComposerThreadTarget, comment: ReviewCommentContext) => void;
   setReviewComments: (
@@ -3985,49 +3958,6 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
           return restored;
-        },
-        clearComposerContentIfUnchanged: (threadRef, expectedCurrent) => {
-          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
-          if (threadKey.length === 0) {
-            return false;
-          }
-          let cleared = false;
-          set((state) => {
-            const current = state.draftsByThreadKey[threadKey];
-            if (
-              !composerDraftEditableContentEqual(
-                captureComposerDraftContent(current),
-                expectedCurrent,
-              )
-            ) {
-              return state;
-            }
-            cleared = true;
-            if (!current) {
-              return state;
-            }
-            const nextDraft: ComposerThreadDraftState = {
-              ...current,
-              prompt: "",
-              images: [],
-              files: [],
-              nonPersistedImageIds: [],
-              persistedAttachments: [],
-              terminalContexts: [],
-              elementContexts: [],
-              previewAnnotations: [],
-              responseAnnotations: [],
-              reviewComments: [],
-            };
-            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
-            if (shouldRemoveDraft(nextDraft)) {
-              delete nextDraftsByThreadKey[threadKey];
-            } else {
-              nextDraftsByThreadKey[threadKey] = nextDraft;
-            }
-            return { draftsByThreadKey: nextDraftsByThreadKey };
-          });
-          return cleared;
         },
         addReviewComment: (threadRef, comment) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);

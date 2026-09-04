@@ -2601,42 +2601,6 @@ describe("composerDraftStore response annotations", () => {
     expect(store.restoreComposerDraftContentIfUnchanged(threadRef, snapshot)).toBe(false);
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("newer edit");
   });
-
-  it("clears a captured send only if the editable draft is unchanged", () => {
-    const store = useComposerDraftStore.getState();
-    store.setPrompt(threadRef, "send this");
-    const snapshot = store.captureComposerDraftContent(threadRef);
-
-    expect(store.clearComposerContentIfUnchanged(threadRef, snapshot)).toBe(true);
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
-
-    store.setPrompt(threadRef, "send this");
-    const secondSnapshot = store.captureComposerDraftContent(threadRef);
-    store.setPrompt(threadRef, "newer edit");
-
-    expect(store.clearComposerContentIfUnchanged(threadRef, secondSnapshot)).toBe(false);
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("newer edit");
-  });
-
-  it("ignores asynchronous image persistence bookkeeping when consuming a send", () => {
-    const store = useComposerDraftStore.getState();
-    const image = makeImage({ id: "response-send-image", previewUrl: "blob:response-send-image" });
-    store.addImage(threadRef, image);
-    const snapshot = store.captureComposerDraftContent(threadRef);
-
-    store.syncPersistedAttachments(threadRef, [
-      {
-        id: image.id,
-        name: image.name,
-        mimeType: image.mimeType,
-        sizeBytes: image.sizeBytes,
-        dataUrl: "data:image/png;base64,AQ==",
-      },
-    ]);
-
-    expect(store.clearComposerContentIfUnchanged(threadRef, snapshot)).toBe(true);
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
-  });
 });
 
 // ---------------------------------------------------------------------------

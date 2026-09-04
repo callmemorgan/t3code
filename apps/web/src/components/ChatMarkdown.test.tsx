@@ -420,6 +420,20 @@ describe("ChatMarkdown response annotations", () => {
     expect(html).toContain("t3-codex-response-annotation-1");
   });
 
+  it("labels a zero-padded directive with its parsed index", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'Before :codex-annotation{index="01"} after'}
+        responseAnnotations={[responseAnnotation]}
+      />,
+    );
+
+    expect(html).toContain("Annotation 1");
+    expect(html).not.toContain("Annotation 01");
+    expect(html).toContain('href="#t3-codex-response-annotation-1"');
+  });
+
   it("renders a well-formed out-of-range directive as a noninteractive label", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown

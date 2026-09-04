@@ -1,19 +1,44 @@
 import { PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
+import { formatResponseAnnotationPrompt } from "@t3tools/shared/responseAnnotations";
 
 type ComposerSubmitEvent = { preventDefault: () => void };
+
+/** The annotation fields that reach the provider input the server formats. */
+export type ComposerSubmissionResponseAnnotation = {
+  readonly selectedText: string;
+  readonly comment: string;
+};
 
 type ComposerSubmissionInput = {
   prompt: string;
   providerInput?: string;
+  /** Annotations this turn will send; they ride along in the provider input. */
+  responseAnnotations?: ReadonlyArray<ComposerSubmissionResponseAnnotation> | undefined;
   submissionTarget: "provider-turn" | "pending-user-input";
 };
 
-export function getComposerPromptLengthValidationMessage(prompt: string): string | null {
+/**
+ * The server wraps annotated turns in a response-annotation envelope before
+ * handing the text to the provider, so the envelope counts against the same
+ * limit. Measuring it here surfaces the existing over-limit banner while the
+ * draft is still editable instead of failing the dispatch.
+ */
+function providerInputLength(
+  text: string,
+  responseAnnotations: ReadonlyArray<ComposerSubmissionResponseAnnotation> | undefined,
+): number {
+  return (formatResponseAnnotationPrompt(text, responseAnnotations) ?? text).length;
+}
+
+export function getComposerPromptLengthValidationMessage(
+  prompt: string,
+  responseAnnotations?: ReadonlyArray<ComposerSubmissionResponseAnnotation> | undefined,
+): string | null {
   const normalizedPrompt = prompt.trim();
   const inputLength = Math.max(
-    normalizedPrompt.length,
-    expandAssistantCitationsForProvider(normalizedPrompt).length,
+    providerInputLength(normalizedPrompt, responseAnnotations),
+    providerInputLength(expandAssistantCitationsForProvider(normalizedPrompt), responseAnnotations),
   );
   const excessCharacters = inputLength - PROVIDER_SEND_TURN_MAX_INPUT_CHARS;
   if (excessCharacters <= 0) return null;
@@ -26,7 +51,10 @@ export function getComposerSubmissionValidationMessage(
   options: ComposerSubmissionInput,
 ): string | null {
   return options.submissionTarget === "provider-turn"
-    ? getComposerPromptLengthValidationMessage(options.providerInput ?? options.prompt)
+    ? getComposerPromptLengthValidationMessage(
+        options.providerInput ?? options.prompt,
+        options.responseAnnotations,
+      )
     : null;
 }
 

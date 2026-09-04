@@ -81,6 +81,55 @@ describe("response annotation directives", () => {
       markdown.replace(':codex-annotation{index="3"}', "[Annotation 3](t3:3)"),
     );
   });
+
+  it("does not rewrite a directive inside link text or a link destination", () => {
+    expect(replace('[see :codex-annotation{index="1"} here](https://x)')).toBe(
+      '[see :codex-annotation{index="1"} here](https://x)',
+    );
+    expect(replace('![alt :codex-annotation{index="1"}](https://x/img.png)')).toBe(
+      '![alt :codex-annotation{index="1"}](https://x/img.png)',
+    );
+    expect(replace('[a](https://x/:codex-annotation{index="1"})')).toBe(
+      '[a](https://x/:codex-annotation{index="1"})',
+    );
+  });
+
+  it("still rewrites directives around and after a link", () => {
+    expect(
+      replace(':codex-annotation{index="1"} [a](https://x) :codex-annotation{index="2"}'),
+    ).toBe("[Annotation 1](t3:1) [a](https://x) [Annotation 2](t3:2)");
+  });
+
+  it("rewrites a directive after an unterminated bracket", () => {
+    expect(replace('[not a link] :codex-annotation{index="1"}')).toBe(
+      "[not a link] [Annotation 1](t3:1)",
+    );
+  });
+
+  it("does not replace directives inside indented code blocks", () => {
+    const markdown = [
+      "Prose:",
+      "",
+      '    :codex-annotation{index="1"}',
+      "",
+      '    :codex-annotation{index="2"}',
+      "",
+      ':codex-annotation{index="3"}',
+    ].join("\n");
+    expect(replace(markdown)).toBe(
+      markdown.replace(':codex-annotation{index="3"}', "[Annotation 3](t3:3)"),
+    );
+  });
+
+  it("treats a tab-indented block at the start of the document as code", () => {
+    const markdown = '\t:codex-annotation{index="1"}\nstill code? no\n';
+    expect(replace(markdown)).toBe('\t:codex-annotation{index="1"}\nstill code? no\n');
+  });
+
+  it("does not treat a continuation line as indented code", () => {
+    const markdown = 'Prose line\n    :codex-annotation{index="1"}\n';
+    expect(replace(markdown)).toBe("Prose line\n    [Annotation 1](t3:1)\n");
+  });
 });
 
 describe("response annotation provider formatting", () => {

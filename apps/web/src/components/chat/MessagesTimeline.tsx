@@ -2,6 +2,7 @@ import {
   type AssistantCitation,
   type EnvironmentId,
   type MessageId,
+  type OrchestrationMessage,
   type ResponseAnnotation,
   type ScopedThreadRef,
   type ServerProviderSkill,
@@ -9,6 +10,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
+import { createResponseAnnotationTurnContextSelector } from "@t3tools/client-runtime/state/response-annotations";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
   resolveWorkEntryToolPresentation,
@@ -184,7 +186,6 @@ import {
   useResponseAnnotationTimelineContext,
   type ResponseAnnotationNavigationRequest,
 } from "./ResponseAnnotationController";
-import { deriveResponseAnnotationTurnContext } from "./responseAnnotationTimeline";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -280,6 +281,7 @@ function TimelineListFooter({ composerInset }: { readonly composerInset: number 
 }
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 const EMPTY_RESPONSE_ANNOTATIONS: ReadonlyArray<ResponseAnnotation> = [];
+const EMPTY_THREAD_MESSAGES: ReadonlyArray<OrchestrationMessage> = [];
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -312,6 +314,14 @@ interface MessagesTimelineProps {
   activeTurnStartedAt: string | null;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
+  /**
+   * The thread's persisted messages, straight from the reducer. Response
+   * annotation directives resolve against the user message bound to the
+   * assistant message's turn, and the reducer keeps unchanged messages
+   * referentially stable so streaming deltas do not rebuild that index.
+   * Omitting them leaves every directive unresolved.
+   */
+  threadMessages?: ReadonlyArray<OrchestrationMessage>;
   latestTurn: TimelineLatestTurn | null;
   runningTurnId: TurnId | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
@@ -350,7 +360,8 @@ interface MessagesTimelineProps {
   responseAnnotationsSupported?: boolean;
   /** Current unsent response annotations, in their display/provider order. */
   responseAnnotations?: ReadonlyArray<ResponseAnnotation>;
-  onCreateResponseAnnotation?: (annotation: ResponseAnnotation) => void;
+  /** Returning `false` rejects the draft, e.g. at the bounded annotation cap. */
+  onCreateResponseAnnotation?: (annotation: ResponseAnnotation) => boolean | void;
   onUpdateResponseAnnotation?: (annotationId: ResponseAnnotation["id"], comment: string) => void;
   onDeleteResponseAnnotation?: (annotationId: ResponseAnnotation["id"]) => void;
   /** Root-controlled request to reveal a sent or draft annotation source. */
@@ -375,6 +386,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAgents = NOOP_OPEN_AGENTS,
   listRef,
   timelineEntries,
+  threadMessages = EMPTY_THREAD_MESSAGES,
   latestTurn,
   runningTurnId,
   turnDiffSummaryByAssistantMessageId,
@@ -580,9 +592,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  // One selector per timeline. It returns the previous maps whenever only
+  // assistant messages changed, so a streaming delta cannot invalidate the
+  // shared row state below.
+  const selectResponseAnnotationTurnContext = useMemo(
+    () => createResponseAnnotationTurnContextSelector(),
+    [],
+  );
   const responseAnnotationTurnContext = useMemo(
-    () => deriveResponseAnnotationTurnContext(timelineEntries),
-    [timelineEntries],
+    () => selectResponseAnnotationTurnContext(threadMessages),
+    [selectResponseAnnotationTurnContext, threadMessages],
   );
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
@@ -755,9 +774,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [isCompacting, isRevertingCheckpoint, isWorking, isPreparingWorktree, latestTurn?.turnId],
   );
 
+  // Read through refs at call time: `rows` and `timelineEntries` change
+  // identity on every streaming delta, and a callback that depended on them
+  // would rebuild the annotation context value and remount every rendered
+  // markdown node once per tick.
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const timelineEntriesRef = useRef(timelineEntries);
+  timelineEntriesRef.current = timelineEntries;
+
   const handleRequestResponseAnnotationSource = useCallback(
     (messageId: MessageId) => {
-      const sourceEntry = timelineEntries.find(
+      const sourceEntry = timelineEntriesRef.current.find(
         (entry) =>
           entry.kind === "message" &&
           entry.message.role === "assistant" &&
@@ -767,7 +795,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       // LegendList to mount the virtualized row instead. The retry signal on
       // the controller will resolve the range after the row is rendered.
       if (sourceEntry) {
-        const sourceRowIndex = rows.findIndex(
+        const sourceRowIndex = rowsRef.current.findIndex(
           (row) => row.kind === "message" && row.message.id === messageId,
         );
         if (sourceRowIndex >= 0) {
@@ -789,7 +817,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }
       if (!sourceEntry) onRequestResponseAnnotationSource?.(messageId);
     },
-    [listRef, onRequestResponseAnnotationSource, rows, timelineEntries],
+    [listRef, onRequestResponseAnnotationSource],
   );
 
   // Stable renderItem — no closure deps. Row components read shared state

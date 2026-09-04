@@ -1547,10 +1547,9 @@ function handleMarkdownFragmentClick(event: ReactMouseEvent<HTMLAnchorElement>, 
 const ResponseAnnotationLink = memo(function ResponseAnnotationLink(props: {
   readonly annotation: ResponseAnnotation;
   readonly index: number;
-  readonly rawIndex: string;
   readonly onActivate: ((annotation: ResponseAnnotation, index: number) => void) | undefined;
 }) {
-  const { annotation, index, rawIndex, onActivate } = props;
+  const { annotation, index, onActivate } = props;
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLAnchorElement>) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
@@ -1562,23 +1561,26 @@ const ResponseAnnotationLink = memo(function ResponseAnnotationLink(props: {
     [annotation, index, onActivate],
   );
   const comment = annotation.comment.trim();
+  // The provider may pad the directive ("index=\"01\""); the label and href
+  // use the parsed number so web reads the same as mobile.
+  const label = String(index);
   const accessibleDescription = comment
-    ? `Annotation ${rawIndex}: ${annotation.selectedText}. ${comment}`
-    : `Annotation ${rawIndex}: ${annotation.selectedText}`;
+    ? `Annotation ${label}: ${annotation.selectedText}. ${comment}`
+    : `Annotation ${label}: ${annotation.selectedText}`;
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <a
-            href={codexResponseAnnotationHref(rawIndex)}
+            href={codexResponseAnnotationHref(label)}
             className="text-blue-600 no-underline decoration-blue-600/40 underline-offset-2 hover:text-blue-500 hover:underline focus-visible:underline dark:text-blue-400 dark:decoration-blue-400/40 dark:hover:text-blue-300"
             aria-label={accessibleDescription}
             onClick={handleClick}
           />
         }
       >
-        Annotation {rawIndex}
+        Annotation {label}
       </TooltipTrigger>
       <TooltipPopup
         side="top"
@@ -2532,7 +2534,6 @@ function ChatMarkdown({
             <ResponseAnnotationLink
               annotation={annotation}
               index={annotationDirective.index}
-              rawIndex={annotationDirective.rawIndex}
               onActivate={onResponseAnnotationClick}
             />
           );

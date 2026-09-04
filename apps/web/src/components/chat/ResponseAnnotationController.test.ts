@@ -1,5 +1,4 @@
 import { MessageId, ResponseAnnotationId, type ResponseAnnotation } from "@t3tools/contracts";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -7,13 +6,9 @@ import {
   deriveResponseAnnotationNumbers,
   isResponseAnnotationSelectionContained,
   responseAnnotationActionPosition,
-  responseAnnotationEditorPresentation,
   responseAnnotationEditorPosition,
   responseAnnotationMarkerPosition,
   responseAnnotationTooltipContent,
-  ResponseAnnotationSourceMarkers,
-  ResponseAnnotationSourceRoot,
-  ResponseAnnotationTimelineController,
 } from "./ResponseAnnotationController";
 
 const sourceMessageId = MessageId.make("assistant-source");
@@ -120,19 +115,6 @@ describe("response annotation timeline controller", () => {
     expect(editor.top + editor.height).toBeLessThanOrEqual(164);
   });
 
-  it("keeps sent annotation panels read-only", () => {
-    expect(responseAnnotationEditorPresentation(3, false)).toEqual({
-      ariaLabel: "View Annotation 3",
-      closeLabel: "Close",
-      readOnly: true,
-    });
-    expect(responseAnnotationEditorPresentation(3, true)).toEqual({
-      ariaLabel: "Edit Annotation 3",
-      closeLabel: "Cancel",
-      readOnly: false,
-    });
-  });
-
   it("shows source text and the saved comment in marker tooltips", () => {
     const withComment = {
       ...annotation("commented", "selected assistant passage"),
@@ -174,71 +156,5 @@ describe("response annotation timeline controller", () => {
     expect(placement.left + 20).toBeLessThanOrEqual(600);
     expect(placement.top).toBeGreaterThanOrEqual(0);
     expect(placement.top + 20).toBeLessThanOrEqual(30);
-  });
-
-  it("marks completed assistant roots without adding row-local listeners", () => {
-    const markup = renderToStaticMarkup(
-      <ResponseAnnotationTimelineController supported draftAnnotations={[]}>
-        <ResponseAnnotationSourceRoot messageId={sourceMessageId} streaming={false}>
-          <div className="chat-markdown">Rendered response</div>
-        </ResponseAnnotationSourceRoot>
-      </ResponseAnnotationTimelineController>,
-    );
-
-    expect(markup).toContain('data-response-annotation-timeline="true"');
-    expect(markup).toContain('data-response-annotation-source="true"');
-    expect(markup).toContain('data-response-annotation-streaming="false"');
-    expect(markup).toContain('data-response-annotation-selectable="true"');
-    expect(markup).not.toContain("data-response-annotation-markers");
-  });
-
-  it("renders every draft annotation as a visible numbered blue bubble", () => {
-    const first = annotation("first", "first");
-    const second = annotation("second", "second");
-    const markup = renderToStaticMarkup(
-      <ResponseAnnotationTimelineController supported draftAnnotations={[first, second]}>
-        <ResponseAnnotationSourceRoot messageId={sourceMessageId} streaming={false}>
-          <div className="chat-markdown">first second</div>
-        </ResponseAnnotationSourceRoot>
-      </ResponseAnnotationTimelineController>,
-    );
-
-    expect(markup.match(/data-response-annotation-marker="/g)).toHaveLength(2);
-    expect(markup).toContain('data-response-annotation-marker-editable="true"');
-    expect(markup).toContain('aria-label="Edit Annotation 1"');
-    expect(markup).toContain('aria-label="Edit Annotation 2"');
-    expect(markup).toContain("pt-6 pr-6");
-    expect(markup.match(/bg-blue-500/g)?.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("keeps draft bubbles after a comment save and renumbers after deletion", () => {
-    const first = annotation("first", "first");
-    const third = { ...annotation("third", "third"), comment: "saved comment" };
-    const markup = renderToStaticMarkup(
-      <ResponseAnnotationTimelineController supported draftAnnotations={[first, third]}>
-        <ResponseAnnotationSourceRoot messageId={sourceMessageId} streaming={false}>
-          <div className="chat-markdown">first third</div>
-        </ResponseAnnotationSourceRoot>
-      </ResponseAnnotationTimelineController>,
-    );
-
-    expect(markup).toContain('aria-label="Edit Annotation 1"');
-    expect(markup).toContain('aria-label="Edit Annotation 2"');
-    expect(markup).toContain('data-response-annotation-marker="third"');
-  });
-
-  it("exposes marker activation as the existing edit interaction for drafts", () => {
-    const draft = annotation("draft", "selected passage");
-    const markup = renderToStaticMarkup(
-      <ResponseAnnotationTimelineController supported draftAnnotations={[draft]}>
-        <ResponseAnnotationSourceMarkers
-          markers={[{ annotation: draft, number: 1, editable: true }]}
-          sourceMessageId={sourceMessageId}
-        />
-      </ResponseAnnotationTimelineController>,
-    );
-
-    expect(markup).toContain('data-response-annotation-marker-editable="true"');
-    expect(markup).toContain('aria-label="Edit Annotation 1"');
   });
 });

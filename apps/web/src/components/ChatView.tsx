@@ -243,7 +243,6 @@ import {
   composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
-  type ComposerDraftContentSnapshot,
   type DraftThreadEnvMode,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
@@ -1520,9 +1519,6 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setInteractionMode,
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
-  const clearComposerDraftContentIfUnchanged = useComposerDraftStore(
-    (store) => store.clearComposerContentIfUnchanged,
-  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
@@ -6436,7 +6432,12 @@ function ChatViewContent(props: ChatViewProps) {
       effort: ctxSelectedPromptEffort,
       text: providerMessageText,
     });
-    if (composerRef.current?.validateProviderInput(outgoingMessageText) === false) {
+    if (
+      composerRef.current?.validateProviderInput(
+        outgoingMessageText,
+        composerResponseAnnotationsSnapshot,
+      ) === false
+    ) {
       return;
     }
 
@@ -6456,11 +6457,6 @@ function ChatViewContent(props: ChatViewProps) {
       };
     };
 
-    const composerDraftContentBeforeSend = useComposerDraftStore
-      .getState()
-      .captureComposerDraftContent(composerDraftTarget);
-    let didClearComposerDraft = false;
-    let clearedComposerDraftContentSnapshot: ComposerDraftContentSnapshot | null = null;
     sendInFlightRef.current = true;
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
     if (attachmentCapabilitiesBeforeUpload.fileBlockReason !== null) {
@@ -6624,17 +6620,17 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       );
     }
-    didClearComposerDraft = clearComposerDraftContentIfUnchanged(
-      composerDraftTarget,
-      composerDraftContentBeforeSend,
-    );
-    if (didClearComposerDraft) {
-      promptRef.current = "";
-      clearedComposerDraftContentSnapshot = useComposerDraftStore
-        .getState()
-        .captureComposerDraftContent(composerDraftTarget);
-      composerRef.current?.resetCursorState();
-    }
+    // The dispatch owns this content now. Clearing unconditionally is what
+    // keeps a keystroke landed during the attachment upload from re-sending
+    // the same prompt, attachments, and response annotations on the next
+    // send. The post-clear snapshot below is only a guard for the failure
+    // path, so restoring a failed send cannot clobber a newer draft.
+    promptRef.current = "";
+    clearComposerDraftContent(composerDraftTarget);
+    const clearedComposerDraftContentSnapshot = useComposerDraftStore
+      .getState()
+      .captureComposerDraftContent(composerDraftTarget);
+    composerRef.current?.resetCursorState();
 
     let firstComposerImageName: string | null = null;
     if (composerImagesSnapshot.length > 0) {
@@ -6774,7 +6770,7 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
-        if (turnUsesAttachmentUploads && didClearComposerDraft) {
+        if (turnUsesAttachmentUploads) {
           releaseDraftAttachments(composerAttachmentsSnapshot);
         }
         acknowledgeActiveThreadWoke();
@@ -6848,16 +6844,13 @@ function ChatViewContent(props: ChatViewProps) {
         const next = existing.filter((message) => message.id !== messageIdForSend);
         return next.length === existing.length ? existing : next;
       });
-      const restoredDraft =
-        didClearComposerDraft && clearedComposerDraftContentSnapshot !== null
-          ? useComposerDraftStore
-              .getState()
-              .restoreComposerDraftContentIfUnchanged(
-                composerDraftTarget,
-                { ...composerDraftContentSnapshot, images: retryComposerImages },
-                clearedComposerDraftContentSnapshot,
-              )
-          : false;
+      const restoredDraft = useComposerDraftStore
+        .getState()
+        .restoreComposerDraftContentIfUnchanged(
+          composerDraftTarget,
+          { ...composerDraftContentSnapshot, images: retryComposerImages },
+          clearedComposerDraftContentSnapshot,
+        );
       if (restoredDraft) {
         promptRef.current = promptForSend;
         composerImagesRef.current = retryComposerImages;
@@ -7923,6 +7916,7 @@ function ChatViewContent(props: ChatViewProps) {
                 activeTurnStartedAt={activeWorkStartedAt}
                 listRef={legendListRef}
                 timelineEntries={timelineEntries}
+                threadMessages={activeThread.messages}
                 latestTurn={activeLatestTurn}
                 runningTurnId={activeRunningTurnId}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}

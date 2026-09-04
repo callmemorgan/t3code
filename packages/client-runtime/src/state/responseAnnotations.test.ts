@@ -55,7 +55,7 @@ describe("response annotation turn selector", () => {
     );
   });
 
-  it("indexes only bound annotations and emits read-only source markers", () => {
+  it("indexes only bound annotations", () => {
     const select = createResponseAnnotationTurnContextSelector();
     const turnId = TurnId.make("turn-1");
     const bound = message({
@@ -79,8 +79,6 @@ describe("response annotation turn selector", () => {
     expect(result.annotationsByTurnId.get(turnId)).toBe(bound.responseAnnotations);
     expect(result.userMessageIdByTurnId.get(turnId)).toBe(bound.id);
     expect(result.annotationsById.get(annotation.id)).toBe(annotation);
-    expect(result.sentSourceMarkers).toEqual([{ annotation, number: 1, editable: false }]);
-    expect(result.sentAnnotations).toBe(result.sentSourceMarkers);
     expect(result.annotationsById.has(ResponseAnnotationId.make("annotation-unbound"))).toBe(false);
   });
 
@@ -109,7 +107,6 @@ describe("response annotation turn selector", () => {
     expect(second.annotationsByTurnId).toBe(first.annotationsByTurnId);
     expect(second.userMessageIdByTurnId).toBe(first.userMessageIdByTurnId);
     expect(second.annotationsById).toBe(first.annotationsById);
-    expect(second.sentSourceMarkers).toBe(first.sentSourceMarkers);
   });
 
   it("invalidates when a user message becomes bound to a turn", () => {

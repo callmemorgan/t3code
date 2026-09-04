@@ -204,6 +204,7 @@ import {
   getComposerPromptLengthValidationMessage,
   getComposerSubmissionValidationMessage,
   submitComposerDraft,
+  type ComposerSubmissionResponseAnnotation,
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
 import {
@@ -1153,8 +1154,15 @@ export interface ChatComposerHandle {
     interactionMode: ProviderInteractionMode;
     interactionModeEnabled: boolean;
   };
-  /** Validate the fully composed text immediately before a provider turn starts. */
-  validateProviderInput: (providerInput: string) => boolean;
+  /**
+   * Validate the fully composed text immediately before a provider turn
+   * starts. Pass the annotations this turn will actually send; the server
+   * wraps them around the text and the envelope counts against the limit.
+   */
+  validateProviderInput: (
+    providerInput: string,
+    responseAnnotations?: ReadonlyArray<ComposerSubmissionResponseAnnotation>,
+  ) => boolean;
 }
 
 // --------------------------------------------------------------------------
@@ -2251,17 +2259,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   useEffect(() => {
     if (composerSubmissionError === null) return;
-    const nextError = getComposerPromptLengthValidationMessage(prompt);
+    const nextError = getComposerPromptLengthValidationMessage(prompt, composerResponseAnnotations);
     if (nextError !== composerSubmissionError) {
       setComposerSubmissionError(nextError);
     }
-  }, [composerSubmissionError, prompt]);
+  }, [composerResponseAnnotations, composerSubmissionError, prompt]);
 
   useEffect(() => {
     setProviderInputSubmissionError(null);
   }, [
     composerElementContexts,
     composerPreviewAnnotations,
+    composerResponseAnnotations,
     composerReviewComments,
     composerTerminalContexts,
     prompt,
@@ -2862,6 +2871,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       const submission = submitComposerDraft({
         prompt: promptRef.current,
+        responseAnnotations: composerResponseAnnotations,
         submissionTarget: activePendingProgress ? "pending-user-input" : "provider-turn",
         event,
         onSend: (sendEvent) => {
@@ -2882,6 +2892,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThreadId,
       activePendingProgress,
       blurMobileComposerAfterSend,
+      composerResponseAnnotations,
       isSendDisabled,
       noProviderAvailable,
       onSend,
@@ -4611,10 +4622,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         interactionMode,
         interactionModeEnabled: planModeUiEnabled,
       }),
-      validateProviderInput: (providerInput: string) => {
+      validateProviderInput: (providerInput, responseAnnotations) => {
         const validationMessage = getComposerSubmissionValidationMessage({
           prompt: promptRef.current,
           providerInput,
+          responseAnnotations,
           submissionTarget: "provider-turn",
         });
         providerInputRejectedRef.current = validationMessage !== null;

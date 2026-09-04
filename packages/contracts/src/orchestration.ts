@@ -1166,7 +1166,7 @@ const ThreadSessionSetCommand = Schema.Struct({
  * message before a provider turn id exists; this command updates that same
  * message once `ProviderService.sendTurn` returns its exact turn id.
  */
-export const ThreadResponseAnnotationsBindTurnCommand = Schema.Struct({
+const ThreadResponseAnnotationsBindTurnCommand = Schema.Struct({
   type: Schema.Literal("thread.response-annotations.bind-turn"),
   commandId: CommandId,
   threadId: ThreadId,

@@ -208,14 +208,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         if (envelope.command.type === "thread.turn.start") {
           const responseAnnotations = envelope.command.message.responseAnnotations;
           if (responseAnnotations !== undefined && responseAnnotations.length > 0) {
-            const getAssistantMessageIds = projectionSnapshotQuery.getAssistantMessageIds;
-            if (getAssistantMessageIds === undefined) {
-              return yield* new OrchestrationCommandInvariantError({
-                commandType: envelope.command.type,
-                detail: "Response annotation source validation is unavailable.",
-              });
-            }
-            const assistantMessageIds = yield* getAssistantMessageIds({
+            const assistantMessageIds = yield* projectionSnapshotQuery.getAssistantMessageIds({
               threadId: envelope.command.threadId,
               messageIds: responseAnnotations.map((annotation) => annotation.sourceMessageId),
             });

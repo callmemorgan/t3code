@@ -247,6 +247,61 @@ layer("ProjectionThreadMessageRepository", (it) => {
     }),
   );
 
+  it.effect("finds the user message bound to a turn without listing the thread", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-bound-turn");
+      const turnId = TurnId.make("turn-bound");
+      const createdAt = "2026-02-28T19:30:00.000Z";
+
+      yield* repository.upsert({
+        messageId: MessageId.make("user-unbound"),
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "unbound",
+        isStreaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+      yield* repository.upsert({
+        messageId: MessageId.make("assistant-bound"),
+        threadId,
+        turnId,
+        role: "assistant",
+        text: "assistant",
+        isStreaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+      const missing = yield* repository.getUserMessageByTurnId({ threadId, turnId });
+      assert.equal(missing._tag, "None");
+
+      yield* repository.upsert({
+        messageId: MessageId.make("user-bound"),
+        threadId,
+        turnId,
+        role: "user",
+        text: "bound",
+        isStreaming: false,
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+      const bound = yield* repository.getUserMessageByTurnId({ threadId, turnId });
+      assert.equal(bound._tag, "Some");
+      if (bound._tag === "Some") {
+        assert.equal(bound.value.messageId, MessageId.make("user-bound"));
+      }
+      const otherThread = yield* repository.getUserMessageByTurnId({
+        threadId: ThreadId.make("thread-other"),
+        turnId,
+      });
+      assert.equal(otherThread._tag, "None");
+    }),
+  );
+
   it.effect("reports malformed response annotation JSON as a decode error", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectionThreadMessageRepository;

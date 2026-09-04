@@ -69,7 +69,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             '2026-02-24T00:00:03.000Z', '2026-02-24T00:00:03.000Z')
       `;
 
-      const ids = yield* snapshotQuery.getAssistantMessageIds!({
+      const ids = yield* snapshotQuery.getAssistantMessageIds({
         threadId: ThreadId.make("thread-1"),
         messageIds: [
           asMessageId("assistant-owned"),
@@ -82,7 +82,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       });
 
       assert.deepEqual(ids, [asMessageId("assistant-owned")]);
-      const emptyIds = yield* snapshotQuery.getAssistantMessageIds!({
+      const emptyIds = yield* snapshotQuery.getAssistantMessageIds({
         threadId: ThreadId.make("thread-1"),
         messageIds: [],
       });

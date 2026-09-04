@@ -8,6 +8,7 @@ import type {
   ChatImageAttachment,
   EnvironmentId,
   MessageId,
+  OrchestrationMessage,
   ResponseAnnotation,
   ThreadId,
   TurnId,
@@ -19,6 +20,7 @@ import {
 } from "@t3tools/client-runtime/codex-artifact-templates";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import { createResponseAnnotationTurnContextSelector } from "@t3tools/client-runtime/state/response-annotations";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   classifyMarkdownImageSource,
@@ -184,7 +186,6 @@ import { MARKDOWN_IMAGE_MAX_WIDTH, resolveMarkdownImageDisplaySize } from "./mar
 import { fileChipMenu, resolveFileChipTarget, type FileChipAction } from "./fileChipMenu";
 import { ResponseAnnotationSummary } from "./ResponseAnnotationSummary";
 import {
-  deriveResponseAnnotationTurnContext,
   prepareResponseAnnotationMarkdown,
   responseAnnotationReferenceFromHref,
 } from "./responseAnnotations";
@@ -222,6 +223,19 @@ const THREAD_FEED_DISCLOSURE_ENTER_TRANSITION = FadeIn.delay(
 // remounts rows when they scroll back into view, and replaying an entrance for
 // old content would be its own kind of jank.
 const FRESH_ENTRY_WINDOW_MS = 3_000;
+/** Older-turn pages the annotation source search will request before giving up. */
+const RESPONSE_ANNOTATION_SOURCE_PAGE_LIMIT = 8;
+const RESPONSE_ANNOTATION_SOURCE_MISSING_MESSAGE =
+  "Couldn't find the annotated response in this thread.";
+/** The summary sheet shows the full text; the alert only needs a readable gist. */
+const RESPONSE_ANNOTATION_ALERT_DETAIL_LIMIT = 300;
+
+function truncateForAlert(value: string): string {
+  return value.length > RESPONSE_ANNOTATION_ALERT_DETAIL_LIMIT
+    ? `${value.slice(0, RESPONSE_ANNOTATION_ALERT_DETAIL_LIMIT).trimEnd()}…`
+    : value;
+}
+
 function isFreshTimestamp(input: string): boolean {
   const timestamp = Date.parse(input);
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
@@ -232,6 +246,8 @@ export interface ThreadFeedProps {
   readonly threadId: ThreadId;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  /** Thread messages from the reducer; annotation turn binding reads these. */
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestTurn: ThreadFeedLatestTurn | null;
@@ -2145,10 +2161,20 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setExpandedVideo(null);
     setExpandedFile(null);
   }, [props.environmentId, props.threadId, props.contentPresentation.kind]);
-  const responseAnnotationTurnContext = useMemo(
-    () => deriveResponseAnnotationTurnContext(props.feed),
-    [props.feed],
+  // One selector instance per feed: it reuses every derived map when only
+  // assistant messages changed, so streaming deltas do not repaint the list.
+  const responseAnnotationSelector = useMemo(
+    () => createResponseAnnotationTurnContextSelector(),
+    [],
   );
+  const responseAnnotationTurnContext = responseAnnotationSelector(props.messages);
+  // Widened to a string key: hrefs carry an unbranded annotation id.
+  const responseAnnotationsByIdRef = useRef<ReadonlyMap<string, ResponseAnnotation>>(
+    responseAnnotationTurnContext.annotationsById,
+  );
+  useEffect(() => {
+    responseAnnotationsByIdRef.current = responseAnnotationTurnContext.annotationsById;
+  }, [responseAnnotationTurnContext.annotationsById]);
   const onResponseAnnotationPressRef = useRef<
     ((annotation: ResponseAnnotation, index: number) => void) | null
   >(null);
@@ -2190,9 +2216,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (href: string) => {
       const annotationReference = responseAnnotationReferenceFromHref(href);
       if (annotationReference !== null) {
-        const annotation = responseAnnotationTurnContext.annotationsById.get(
-          annotationReference.annotationId,
-        );
+        const annotation = responseAnnotationsByIdRef.current.get(annotationReference.annotationId);
         if (annotation !== undefined) {
           onResponseAnnotationPressRef.current?.(annotation, annotationReference.index);
         }
@@ -2286,13 +2310,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         void tryOpenExternalUrl(presentation.href, "markdown-link");
       }
     },
-    [
-      navigation,
-      props.environmentId,
-      props.threadId,
-      props.workspaceRoot,
-      responseAnnotationTurnContext.annotationsById,
-    ],
+    [navigation, props.environmentId, props.threadId, props.workspaceRoot],
   );
   const markdownLinkHandlers = useMemo<MarkdownLinkHandlers>(
     () => ({
@@ -2581,21 +2599,32 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const [pendingResponseAnnotationSourceId, setPendingResponseAnnotationSourceId] =
     useState<MessageId | null>(null);
+  const responseAnnotationSourcePageCountRef = useRef(0);
+  const abandonResponseAnnotationSourceSearch = useCallback(() => {
+    setPendingResponseAnnotationSourceId(null);
+    responseAnnotationSourcePageCountRef.current = 0;
+    Alert.alert("Annotation source not found", RESPONSE_ANNOTATION_SOURCE_MISSING_MESSAGE, [
+      { text: "OK", style: "cancel" },
+    ]);
+  }, []);
   useEffect(() => {
     setPendingResponseAnnotationSourceId(null);
+    responseAnnotationSourcePageCountRef.current = 0;
   }, [feedThreadKey]);
+  /** Requests one older page; false when a page is already in flight. */
   const requestOlderTurnsForResponseAnnotation = useCallback(() => {
     if (
       props.loadEarlier === null ||
       props.loadEarlier === undefined ||
       props.loadEarlier.loading
     ) {
-      return;
+      return false;
     }
     // The request registry coalesces duplicate requests and the state machine
     // checks its own loading flag. That lets a stale/reverted page response
     // retry even when the visible feed keeps the same array identity.
     props.loadEarlier.onLoadEarlier();
+    return true;
   }, [props.loadEarlier]);
 
   // Both the initial press and the retry effect (after an older page loads or a
@@ -2603,6 +2632,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const revealResponseAnnotationSourceIndex = useCallback(
     (sourceIndex: number) => {
       setPendingResponseAnnotationSourceId(null);
+      responseAnnotationSourcePageCountRef.current = 0;
       requestAnimationFrame(() => {
         props.listRef.current?.scrollToIndex({
           index: sourceIndex,
@@ -2637,6 +2667,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         !expandedTurnIds.has(sourceTurnId)
       ) {
         setPendingResponseAnnotationSourceId(sourceMessageId);
+        responseAnnotationSourcePageCountRef.current = 0;
         setInteractionState((current) => ({
           ...current,
           expandedTurnIds: new Set(current.expandedTurnIds).add(sourceTurnId),
@@ -2646,12 +2677,15 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
 
       if (props.loadEarlier !== null && props.loadEarlier !== undefined) {
         setPendingResponseAnnotationSourceId(sourceMessageId);
-        requestOlderTurnsForResponseAnnotation();
+        responseAnnotationSourcePageCountRef.current = requestOlderTurnsForResponseAnnotation()
+          ? 1
+          : 0;
       } else {
-        setPendingResponseAnnotationSourceId(null);
+        abandonResponseAnnotationSourceSearch();
       }
     },
     [
+      abandonResponseAnnotationSourceSearch,
       expandedTurnIds,
       presentedFeed,
       props.feed,
@@ -2672,12 +2706,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       revealResponseAnnotationSourceIndex(sourceIndex);
       return;
     }
-    if (props.loadEarlier === null || props.loadEarlier === undefined) {
-      setPendingResponseAnnotationSourceId(null);
+    // Paging is bounded: a source that is not in the thread (or sits beyond the
+    // bound) must not walk the whole history one page at a time.
+    if (
+      props.loadEarlier === null ||
+      props.loadEarlier === undefined ||
+      responseAnnotationSourcePageCountRef.current >= RESPONSE_ANNOTATION_SOURCE_PAGE_LIMIT
+    ) {
+      abandonResponseAnnotationSourceSearch();
       return;
     }
-    requestOlderTurnsForResponseAnnotation();
+    if (requestOlderTurnsForResponseAnnotation()) {
+      responseAnnotationSourcePageCountRef.current += 1;
+    }
   }, [
+    abandonResponseAnnotationSourceSearch,
     pendingResponseAnnotationSourceId,
     presentedFeed,
     props.loadEarlier,
@@ -2689,8 +2732,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (annotation: ResponseAnnotation, index: number) => {
       void Haptics.selectionAsync();
       scrollToResponseAnnotationSourceMessage(annotation.sourceMessageId);
-      const selectedText = annotation.selectedText.trim();
-      const comment = annotation.comment.trim();
+      const selectedText = truncateForAlert(annotation.selectedText.trim());
+      const comment = truncateForAlert(annotation.comment.trim());
       const detail = comment.length > 0 ? `${selectedText}\n\n${comment}` : selectedText;
       Alert.alert(`Annotation ${index}`, detail, [{ text: "OK", style: "cancel" }]);
     },

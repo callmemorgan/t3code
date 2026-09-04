@@ -5,13 +5,6 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 
-/** A read-only source marker for an annotation that has already been sent. */
-export interface ResponseAnnotationSourceMarker {
-  readonly annotation: ResponseAnnotation;
-  readonly number: number;
-  readonly editable: false;
-}
-
 /**
  * The turn-scoped annotation indexes used by chat timelines and renderers.
  *
@@ -23,23 +16,14 @@ export interface ResponseAnnotationTurnContext {
   readonly annotationsByTurnId: ReadonlyMap<TurnId, ReadonlyArray<ResponseAnnotation>>;
   readonly userMessageIdByTurnId: ReadonlyMap<TurnId, MessageId>;
   readonly annotationsById: ReadonlyMap<ResponseAnnotation["id"], ResponseAnnotation>;
-  readonly sentSourceMarkers: ReadonlyArray<ResponseAnnotationSourceMarker>;
-  /** Alias for callers that name the flattened collection sent annotations. */
-  readonly sentAnnotations: ReadonlyArray<ResponseAnnotationSourceMarker>;
 }
 
-const EMPTY_RESPONSE_ANNOTATION_SOURCE_MARKERS: ReadonlyArray<ResponseAnnotationSourceMarker> =
-  Object.freeze([]);
-const EMPTY_RESPONSE_ANNOTATION_TURN_CONTEXT: ResponseAnnotationTurnContext = {
+/** The stable result returned when no sent user message has bound annotations. */
+export const EMPTY_RESPONSE_ANNOTATION_TURN_CONTEXT: ResponseAnnotationTurnContext = {
   annotationsByTurnId: new Map(),
   userMessageIdByTurnId: new Map(),
   annotationsById: new Map(),
-  sentSourceMarkers: EMPTY_RESPONSE_ANNOTATION_SOURCE_MARKERS,
-  sentAnnotations: EMPTY_RESPONSE_ANNOTATION_SOURCE_MARKERS,
 };
-
-/** The stable result returned when no sent user message has bound annotations. */
-export { EMPTY_RESPONSE_ANNOTATION_TURN_CONTEXT };
 
 interface BoundAnnotationSource {
   readonly message: OrchestrationMessage;
@@ -89,7 +73,6 @@ function buildResponseAnnotationTurnContext(
   const annotationsByTurnId = new Map<TurnId, ReadonlyArray<ResponseAnnotation>>();
   const userMessageIdByTurnId = new Map<TurnId, MessageId>();
   const annotationsById = new Map<ResponseAnnotation["id"], ResponseAnnotation>();
-  const sentSourceMarkers: ResponseAnnotationSourceMarker[] = [];
 
   for (const source of sources) {
     // A turn has one initiating user message. Keep the first source if a
@@ -99,19 +82,12 @@ function buildResponseAnnotationTurnContext(
       annotationsByTurnId.set(source.turnId, source.annotations);
       userMessageIdByTurnId.set(source.turnId, source.message.id);
     }
-    for (const [index, annotation] of source.annotations.entries()) {
+    for (const annotation of source.annotations) {
       annotationsById.set(annotation.id, annotation);
-      sentSourceMarkers.push({ annotation, number: index + 1, editable: false });
     }
   }
 
-  return {
-    annotationsByTurnId,
-    userMessageIdByTurnId,
-    annotationsById,
-    sentSourceMarkers,
-    sentAnnotations: sentSourceMarkers,
-  };
+  return { annotationsByTurnId, userMessageIdByTurnId, annotationsById };
 }
 
 /**
@@ -119,6 +95,9 @@ function buildResponseAnnotationTurnContext(
  * messages (including streaming deltas) changed. The selector compares the
  * bound user-message source objects, so callers may pass a newly allocated
  * message array on every reducer update without causing timeline churn.
+ *
+ * Create one selector per timeline instance so unrelated threads do not
+ * invalidate each other.
  */
 export function createResponseAnnotationTurnContextSelector(): (
   messages: ReadonlyArray<OrchestrationMessage>,
@@ -136,19 +115,3 @@ export function createResponseAnnotationTurnContextSelector(): (
     return previousResult;
   };
 }
-
-/** Alias emphasizing that the selector indexes turn-scoped annotations. */
-export const createResponseAnnotationSelector = createResponseAnnotationTurnContextSelector;
-
-// The direct helper is useful for non-reactive consumers. Its selector is
-// intentionally shared so repeated calls also retain reference identity.
-const defaultResponseAnnotationTurnContextSelector = createResponseAnnotationTurnContextSelector();
-
-export function selectResponseAnnotationTurnContext(
-  messages: ReadonlyArray<OrchestrationMessage>,
-): ResponseAnnotationTurnContext {
-  return defaultResponseAnnotationTurnContextSelector(messages);
-}
-
-/** Compatibility name for timeline code that previously derived by entry order. */
-export const deriveResponseAnnotationTurnContext = selectResponseAnnotationTurnContext;
