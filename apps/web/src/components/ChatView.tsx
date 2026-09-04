@@ -1519,6 +1519,9 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setInteractionMode,
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const consumeComposerDraftContent = useComposerDraftStore(
+    (store) => store.consumeComposerDraftContent,
+  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
@@ -6400,8 +6403,11 @@ function ChatViewContent(props: ChatViewProps) {
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
     const composerResponseAnnotationsSnapshot = [...responseAnnotationsForSend];
     const composerReviewCommentsSnapshot: ReviewCommentContext[] = [...composerReviewComments];
+    const composerDraftContentBeforeSend = useComposerDraftStore
+      .getState()
+      .captureComposerDraftContent(composerDraftTarget);
     const composerDraftContentSnapshot = {
-      ...useComposerDraftStore.getState().captureComposerDraftContent(composerDraftTarget),
+      ...composerDraftContentBeforeSend,
       prompt: promptForSend,
       images: composerImagesSnapshot,
       terminalContexts: composerTerminalContextsSnapshot,
@@ -6620,17 +6626,27 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       );
     }
-    // The dispatch owns this content now. Clearing unconditionally is what
-    // keeps a keystroke landed during the attachment upload from re-sending
-    // the same prompt, attachments, and response annotations on the next
-    // send. The post-clear snapshot below is only a guard for the failure
-    // path, so restoring a failed send cannot clobber a newer draft.
-    promptRef.current = "";
-    clearComposerDraftContent(composerDraftTarget);
+    // The dispatch owns the captured content now. Remove exactly that from
+    // the live draft: the composer stayed editable during the attachment
+    // upload, so text typed or context added since the capture survives,
+    // while the sent prompt, attachments, and annotations can never ride
+    // along on the next send. The post-consume snapshot only guards the
+    // failure path so restoring a failed send cannot clobber a newer draft.
+    consumeComposerDraftContent(composerDraftTarget, composerDraftContentBeforeSend);
     const clearedComposerDraftContentSnapshot = useComposerDraftStore
       .getState()
       .captureComposerDraftContent(composerDraftTarget);
-    composerRef.current?.resetCursorState();
+    const remainingPrompt = clearedComposerDraftContentSnapshot.prompt;
+    promptRef.current = remainingPrompt;
+    composerRef.current?.resetCursorState(
+      remainingPrompt.length > 0
+        ? {
+            cursor: collapseExpandedComposerCursor(remainingPrompt, remainingPrompt.length),
+            prompt: remainingPrompt,
+            detectTrigger: false,
+          }
+        : undefined,
+    );
 
     let firstComposerImageName: string | null = null;
     if (composerImagesSnapshot.length > 0) {

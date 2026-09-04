@@ -712,6 +712,17 @@ interface ComposerDraftStoreState {
     snapshot: ComposerDraftContentSnapshot,
     expectedCurrent?: ComposerDraftContentSnapshot,
   ) => boolean;
+  /**
+   * Removes exactly the captured content from the live draft after it was
+   * dispatched. Text typed after the capture stays when the sent prompt is a
+   * prefix of the current prompt; attachments, contexts, and annotations added
+   * since the capture always stay. Anything captured never lingers, so the
+   * next send cannot repeat it.
+   */
+  consumeComposerDraftContent: (
+    threadRef: ComposerThreadTarget,
+    sent: ComposerDraftContentSnapshot,
+  ) => void;
   addReviewComment: (threadRef: ComposerThreadTarget, comment: ReviewCommentContext) => void;
   setReviewComments: (
     threadRef: ComposerThreadTarget,
@@ -936,6 +947,33 @@ function normalizeTerminalContextsForThread(
   }
 
   return normalizedContexts;
+}
+
+function draftItemId(value: unknown): string | null {
+  return typeof value === "object" &&
+    value !== null &&
+    "id" in value &&
+    typeof value.id === "string"
+    ? value.id
+    : null;
+}
+
+/** Drops items the send consumed, matched by id when present, else by reference. */
+function withoutSentItems<T>(current: ReadonlyArray<T>, sent: ReadonlyArray<T>): T[] {
+  if (sent.length === 0) return [...current];
+  const sentIds = new Set(sent.map(draftItemId).filter((id): id is string => id !== null));
+  return current.filter((item) => {
+    const id = draftItemId(item);
+    return id !== null ? !sentIds.has(id) : !sent.includes(item);
+  });
+}
+
+function promptWithoutSentText(current: string, sent: string): string {
+  if (sent.length === 0) return current;
+  if (current === sent) return "";
+  // Typing continued after the capture: keep only the appended text. An edit
+  // anywhere inside the sent text cannot be separated, so it is cleared.
+  return current.startsWith(sent) ? current.slice(sent.length).trimStart() : "";
 }
 
 function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
@@ -3958,6 +3996,43 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
           return restored;
+        },
+        consumeComposerDraftContent: (threadRef, sent) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          set((state) => {
+            const current = state.draftsByThreadKey[threadKey];
+            if (!current) return state;
+            const images = withoutSentItems(current.images, sent.images);
+            const remainingImageIds = new Set(images.map((image) => image.id));
+            const nextDraft: ComposerThreadDraftState = {
+              ...current,
+              prompt: promptWithoutSentText(current.prompt, sent.prompt),
+              images,
+              files: withoutSentItems(current.files, sent.files),
+              nonPersistedImageIds: current.nonPersistedImageIds.filter((id) =>
+                remainingImageIds.has(id),
+              ),
+              persistedAttachments: current.persistedAttachments.filter((attachment) =>
+                remainingImageIds.has(attachment.id),
+              ),
+              terminalContexts: withoutSentItems(current.terminalContexts, sent.terminalContexts),
+              elementContexts: withoutSentItems(current.elementContexts, sent.elementContexts),
+              previewAnnotations: withoutSentItems(
+                current.previewAnnotations,
+                sent.previewAnnotations,
+              ),
+              responseAnnotations: withoutSentItems(
+                current.responseAnnotations,
+                sent.responseAnnotations,
+              ),
+              reviewComments: withoutSentItems(current.reviewComments, sent.reviewComments),
+            };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
+            else nextDraftsByThreadKey[threadKey] = nextDraft;
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
         },
         addReviewComment: (threadRef, comment) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);

@@ -223,8 +223,6 @@ const THREAD_FEED_DISCLOSURE_ENTER_TRANSITION = FadeIn.delay(
 // remounts rows when they scroll back into view, and replaying an entrance for
 // old content would be its own kind of jank.
 const FRESH_ENTRY_WINDOW_MS = 3_000;
-/** Older-turn pages the annotation source search will request before giving up. */
-const RESPONSE_ANNOTATION_SOURCE_PAGE_LIMIT = 8;
 const RESPONSE_ANNOTATION_SOURCE_MISSING_MESSAGE =
   "Couldn't find the annotated response in this thread.";
 /** The summary sheet shows the full text; the alert only needs a readable gist. */
@@ -2599,32 +2597,30 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const [pendingResponseAnnotationSourceId, setPendingResponseAnnotationSourceId] =
     useState<MessageId | null>(null);
-  const responseAnnotationSourcePageCountRef = useRef(0);
+  // The server validates that a source message belongs to the thread, so the
+  // search pages back until history is exhausted. Only a source that is gone
+  // from history (for example after a revert) ends here.
   const abandonResponseAnnotationSourceSearch = useCallback(() => {
     setPendingResponseAnnotationSourceId(null);
-    responseAnnotationSourcePageCountRef.current = 0;
     Alert.alert("Annotation source not found", RESPONSE_ANNOTATION_SOURCE_MISSING_MESSAGE, [
       { text: "OK", style: "cancel" },
     ]);
   }, []);
   useEffect(() => {
     setPendingResponseAnnotationSourceId(null);
-    responseAnnotationSourcePageCountRef.current = 0;
   }, [feedThreadKey]);
-  /** Requests one older page; false when a page is already in flight. */
   const requestOlderTurnsForResponseAnnotation = useCallback(() => {
     if (
       props.loadEarlier === null ||
       props.loadEarlier === undefined ||
       props.loadEarlier.loading
     ) {
-      return false;
+      return;
     }
     // The request registry coalesces duplicate requests and the state machine
     // checks its own loading flag. That lets a stale/reverted page response
     // retry even when the visible feed keeps the same array identity.
     props.loadEarlier.onLoadEarlier();
-    return true;
   }, [props.loadEarlier]);
 
   // Both the initial press and the retry effect (after an older page loads or a
@@ -2632,7 +2628,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const revealResponseAnnotationSourceIndex = useCallback(
     (sourceIndex: number) => {
       setPendingResponseAnnotationSourceId(null);
-      responseAnnotationSourcePageCountRef.current = 0;
       requestAnimationFrame(() => {
         props.listRef.current?.scrollToIndex({
           index: sourceIndex,
@@ -2667,7 +2662,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         !expandedTurnIds.has(sourceTurnId)
       ) {
         setPendingResponseAnnotationSourceId(sourceMessageId);
-        responseAnnotationSourcePageCountRef.current = 0;
         setInteractionState((current) => ({
           ...current,
           expandedTurnIds: new Set(current.expandedTurnIds).add(sourceTurnId),
@@ -2677,9 +2671,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
 
       if (props.loadEarlier !== null && props.loadEarlier !== undefined) {
         setPendingResponseAnnotationSourceId(sourceMessageId);
-        responseAnnotationSourcePageCountRef.current = requestOlderTurnsForResponseAnnotation()
-          ? 1
-          : 0;
+        requestOlderTurnsForResponseAnnotation();
       } else {
         abandonResponseAnnotationSourceSearch();
       }
@@ -2706,19 +2698,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       revealResponseAnnotationSourceIndex(sourceIndex);
       return;
     }
-    // Paging is bounded: a source that is not in the thread (or sits beyond the
-    // bound) must not walk the whole history one page at a time.
-    if (
-      props.loadEarlier === null ||
-      props.loadEarlier === undefined ||
-      responseAnnotationSourcePageCountRef.current >= RESPONSE_ANNOTATION_SOURCE_PAGE_LIMIT
-    ) {
+    if (props.loadEarlier === null || props.loadEarlier === undefined) {
       abandonResponseAnnotationSourceSearch();
       return;
     }
-    if (requestOlderTurnsForResponseAnnotation()) {
-      responseAnnotationSourcePageCountRef.current += 1;
-    }
+    requestOlderTurnsForResponseAnnotation();
   }, [
     abandonResponseAnnotationSourceSearch,
     pendingResponseAnnotationSourceId,

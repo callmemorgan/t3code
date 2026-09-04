@@ -2570,6 +2570,45 @@ describe("composerDraftStore response annotations", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
   });
 
+  it("consumes a sent draft and leaves nothing when it was not edited", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "send this");
+    store.addResponseAnnotation(threadRef, makeResponseAnnotation({ id: "sent-annotation" }));
+    const sent = store.captureComposerDraftContent(threadRef);
+
+    store.consumeComposerDraftContent(threadRef, sent);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
+
+  it("keeps text typed and annotations added after the send was captured", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "send this");
+    const sentAnnotation = makeResponseAnnotation({ id: "sent-annotation" });
+    store.addResponseAnnotation(threadRef, sentAnnotation);
+    const sent = store.captureComposerDraftContent(threadRef);
+
+    // The composer stays editable while attachments upload.
+    store.setPrompt(threadRef, "send this and also this");
+    const laterAnnotation = makeResponseAnnotation({ id: "later-annotation", comment: "later" });
+    store.addResponseAnnotation(threadRef, laterAnnotation);
+
+    store.consumeComposerDraftContent(threadRef, sent);
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.prompt).toBe("and also this");
+    expect(draft?.responseAnnotations).toEqual([laterAnnotation]);
+  });
+
+  it("clears a prompt edited inside the sent text but never re-sends captured annotations", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "send this");
+    store.addResponseAnnotation(threadRef, makeResponseAnnotation({ id: "sent-annotation" }));
+    const sent = store.captureComposerDraftContent(threadRef);
+
+    store.setPrompt(threadRef, "SEND this");
+    store.consumeComposerDraftContent(threadRef, sent);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
+
   it("keeps source-bound annotations when clearing stash-transferable content", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(threadRef, "follow up");
