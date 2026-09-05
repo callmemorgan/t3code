@@ -1,9 +1,10 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ProcessRunner from "../processRunner.ts";
@@ -24,6 +25,7 @@ import {
  */
 
 const PINNED_RUNTIME_DIR = "runtime";
+const PINNED_RUNTIME_LOCK_FILE = "versions.lock";
 const PINNED_RUNTIME_INSTALL_TIMEOUT = Duration.minutes(10);
 // Boot-service setup and remote update can construct separate layers. Serialize
 // the complete install transaction across every caller in this process.
@@ -233,6 +235,100 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
 export const ensurePinnedRuntimeInstalled = (input: PinnedRuntimeInstallInput) =>
   pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input));
 
+export class PinnedRuntimeBusyError extends Schema.TaggedErrorClass<PinnedRuntimeBusyError>()(
+  "PinnedRuntimeBusyError",
+  { lockPath: Schema.String, pid: Schema.optional(Schema.Number) },
+) {
+  override get message(): string {
+    return this.pid === undefined
+      ? `Another process holds the service runtime lock at '${this.lockPath}'.`
+      : `Process ${this.pid} holds the service runtime lock at '${this.lockPath}'.`;
+  }
+}
+
+const processIsAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to someone else.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+/**
+ * Serializes the processes that change runtime/versions: the CLI's install,
+ * which is the only path that can move the active version backward, and both
+ * prune callers. Pruning decides from one read of launcher state, so a
+ * downgrade that selected an older runtime between that read and the delete
+ * would leave the service pointing at a missing runtime. Forward updates never
+ * conflict, because they only add versions newer than the active one and
+ * pruning never touches those, so the launcher's remote update stays
+ * lock-free.
+ *
+ * The lock is a file created exclusively that holds its owner's pid. A lock
+ * whose owner is gone is stale and taken over. A lock whose owner is alive
+ * fails fast with PinnedRuntimeBusyError instead of waiting; the lock is not
+ * reentrant.
+ */
+export const withPinnedRuntimeLock = <A, E, R>(
+  input: {
+    readonly baseDir: string;
+    readonly fs: FileSystem.FileSystem;
+    readonly path: Path.Path;
+    readonly pid?: number;
+    readonly isProcessAlive?: (pid: number) => boolean;
+  },
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | PinnedRuntimeBusyError | PlatformError.PlatformError, R> => {
+  const lockPath = input.path.join(input.baseDir, PINNED_RUNTIME_DIR, PINNED_RUNTIME_LOCK_FILE);
+  const pid = input.pid ?? process.pid;
+  const isProcessAlive = input.isProcessAlive ?? processIsAlive;
+  const create = Effect.scoped(
+    Effect.gen(function* () {
+      const file = yield* input.fs.open(lockPath, { flag: "wx", mode: 0o600 });
+      yield* file.writeAll(new TextEncoder().encode(`${pid}\n`));
+    }),
+  );
+  const claim = (
+    takeovers: number,
+  ): Effect.Effect<void, PinnedRuntimeBusyError | PlatformError.PlatformError> =>
+    create.pipe(
+      Effect.catch((error) =>
+        error.reason._tag !== "AlreadyExists"
+          ? Effect.fail(error)
+          : Effect.gen(function* () {
+              // The holder may release between our failed create and this read.
+              const contents = yield* input.fs
+                .readFileString(lockPath)
+                .pipe(
+                  Effect.catch((readError) =>
+                    readError.reason._tag === "NotFound"
+                      ? Effect.succeed("")
+                      : Effect.fail(readError),
+                  ),
+                );
+              const holder = Number.parseInt(contents.trim(), 10);
+              const holderPid = Number.isInteger(holder) && holder > 0 ? holder : undefined;
+              if ((holderPid !== undefined && isProcessAlive(holderPid)) || takeovers === 0) {
+                return yield* new PinnedRuntimeBusyError({ lockPath, pid: holderPid });
+              }
+              yield* input.fs.remove(lockPath, { force: true });
+              return yield* claim(takeovers - 1);
+            }),
+      ),
+    );
+  return Effect.scoped(
+    Effect.gen(function* () {
+      yield* input.fs.makeDirectory(input.path.dirname(lockPath), { recursive: true });
+      yield* Effect.acquireRelease(claim(2), () =>
+        input.fs.remove(lockPath, { force: true }).pipe(Effect.ignore),
+      );
+      return yield* effect;
+    }),
+  );
+};
+
 /**
  * Removes completed runtimes older than the active one, keeping the newest
  * `keep` of them beside the active version. Never touches the active version,
@@ -300,11 +396,16 @@ export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(funct
   if (!input.dryRun) {
     yield* Effect.forEach(
       versions,
-      (version) =>
-        input.fs.remove(pinnedRuntimePaths(input.path, input.baseDir, version).versionDir, {
-          recursive: true,
-          force: true,
-        }),
+      (version) => {
+        const paths = pinnedRuntimePaths(input.path, input.baseDir, version);
+        // Drop the sentinel first so an interrupted removal never leaves a tree
+        // that still claims to be a complete install.
+        return input.fs
+          .remove(paths.sentinelPath, { force: true })
+          .pipe(
+            Effect.andThen(input.fs.remove(paths.versionDir, { recursive: true, force: true })),
+          );
+      },
       { discard: true },
     );
   }
@@ -375,13 +476,16 @@ export const sweepManagedRuntimes = <E>(input: {
   Effect.gen(function* () {
     if (!input.managed) return;
     const keep = yield* input.retainedRuntimes;
-    const result = yield* sweepPinnedRuntimes({
-      baseDir: input.baseDir,
-      keep,
-      dryRun: false,
-      fs: input.fs,
-      path: input.path,
-    });
+    const result = yield* withPinnedRuntimeLock(
+      input,
+      sweepPinnedRuntimes({
+        baseDir: input.baseDir,
+        keep,
+        dryRun: false,
+        fs: input.fs,
+        path: input.path,
+      }),
+    );
     if (result.status === "skipped") {
       yield* Effect.logWarning("Skipped the service runtime sweep", { reason: result.reason });
     } else if (result.versions.length > 0) {

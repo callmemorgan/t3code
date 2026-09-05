@@ -73,6 +73,15 @@ launcher needs valid state to have started the child at all.
 `t3 service prune [--dry-run]` applies the same count from the CLI, reading it from `settings.json`,
 and refuses while an update is pending. Neither stops or restarts the service.
 
+Pruning decides from one read of launcher state, and `t3 service update --allow-downgrade` is the
+one path that can move the active version backward, onto a runtime that read may already have
+marked for removal. `runtime/versions.lock` serializes them: the CLI install holds it from its
+first check of the pinned runtime until the unit is active, and both prune callers hold it around
+the sweep. The lock is an exclusively created file holding the owner's pid. A lock whose owner is
+gone is taken over; a lock whose owner is alive fails the command with `BootServiceBusyError`
+(the startup sweep logs a warning) rather than waiting. Remote updates do not take the lock: the
+launcher rejects backward targets, and pruning never touches versions newer than the active one.
+
 ## Database Rollback
 
 The launcher snapshots `state.sqlite`, `state.sqlite-wal`, and `state.sqlite-shm` after the old

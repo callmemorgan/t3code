@@ -21,6 +21,7 @@ import {
   PinnedRuntimeInstallError,
   type PinnedRuntimePruneResult,
   sweepPinnedRuntimes,
+  withPinnedRuntimeLock,
 } from "./pinnedRuntime.ts";
 import {
   SERVICE_LAUNCHER_FILE,
@@ -450,12 +451,24 @@ export class BootServicePruneError extends Schema.TaggedErrorClass<BootServicePr
   }
 }
 
+export class BootServiceBusyError extends Schema.TaggedErrorClass<BootServiceBusyError>()(
+  "BootServiceBusyError",
+  { lockPath: Schema.String, pid: Schema.optional(Schema.Number) },
+) {
+  override get message(): string {
+    const holder =
+      this.pid === undefined ? "Another t3 command" : `Another t3 command (pid ${this.pid})`;
+    return `${holder} is changing the T3 Code service runtimes. Wait for it to finish and retry, or remove '${this.lockPath}' if that process is gone.`;
+  }
+}
+
 export type BootServiceError =
   | BootServiceUnsupportedError
   | BootServiceCommandError
   | BootServiceInstallError
   | BootServiceUpdatePendingError
-  | BootServiceDowngradeRefusedError;
+  | BootServiceDowngradeRefusedError
+  | BootServiceBusyError;
 
 export interface BootServiceStatus {
   readonly supported: boolean;
@@ -486,7 +499,10 @@ export class BootService extends Context.Service<
       options: BootServicePruneOptions,
     ) => Effect.Effect<
       BootServicePruneResult,
-      BootServicePruneStateError | BootServicePruneError | BootServiceUpdatePendingError
+      | BootServicePruneStateError
+      | BootServicePruneError
+      | BootServiceUpdatePendingError
+      | BootServiceBusyError
     >;
   }
 >()("t3/cloud/bootService") {}
@@ -621,14 +637,10 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       { discard: true },
     );
 
-  const install = Effect.fn("cloud.boot_service.install")(function* (options?: {
-    readonly allowDowngrade?: boolean;
-  }) {
-    const manager = yield* requireManager;
-    yield* fs
-      .makeDirectory(input.logsDir, { recursive: true })
-      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
-
+  const installUnderLock = Effect.fn("cloud.boot_service.install_runtime")(function* (
+    manager: BootServiceManager,
+    options?: { readonly allowDowngrade?: boolean },
+  ) {
     // Prepare every immutable artifact before stopping the installed unit.
     yield* ensurePinnedRuntimeInstalled({
       baseDir: input.baseDir,
@@ -738,6 +750,29 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     return plan;
   });
 
+  const install = Effect.fn("cloud.boot_service.install")(function* (options?: {
+    readonly allowDowngrade?: boolean;
+  }) {
+    const manager = yield* requireManager;
+    yield* fs
+      .makeDirectory(input.logsDir, { recursive: true })
+      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
+
+    // Hold the runtime lock from the first check of the pinned runtime until
+    // the unit is active, so a concurrent prune cannot remove the runtime this
+    // command selects (see withPinnedRuntimeLock).
+    return yield* withPinnedRuntimeLock(
+      { baseDir: input.baseDir, fs, path },
+      installUnderLock(manager, options),
+    ).pipe(
+      Effect.catchTags({
+        PinnedRuntimeBusyError: (error) =>
+          new BootServiceBusyError({ lockPath: error.lockPath, pid: error.pid }),
+        PlatformError: (cause) => new BootServiceInstallError({ cause }),
+      }),
+    );
+  });
+
   const uninstall: BootService["Service"]["uninstall"] = Effect.gen(function* () {
     const manager = yield* requireManager;
     if (
@@ -799,18 +834,23 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
 
   const prune: BootService["Service"]["prune"] = Effect.fn("cloud.boot_service.prune")(
     function* (options) {
-      const result = yield* sweepPinnedRuntimes({
-        baseDir: input.baseDir,
-        keep: options.keep,
-        dryRun: options.dryRun,
-        fs,
-        path,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
+      const result = yield* withPinnedRuntimeLock(
+        { baseDir: input.baseDir, fs, path },
+        sweepPinnedRuntimes({
+          baseDir: input.baseDir,
+          keep: options.keep,
+          dryRun: options.dryRun,
+          fs,
+          path,
+        }),
+      ).pipe(
+        Effect.catchTags({
+          PinnedRuntimeBusyError: (error) =>
+            new BootServiceBusyError({ lockPath: error.lockPath, pid: error.pid }),
+          PlatformError: (cause) =>
             new BootServicePruneError({
-              // The filesystem error names what it touched (the state file or
-              // one version tree); fall back to the versions directory.
+              // The filesystem error names what it touched (the lock, the state
+              // file, or one version tree); fall back to the versions directory.
               path:
                 "pathOrDescriptor" in cause.reason &&
                 typeof cause.reason.pathOrDescriptor === "string"
@@ -818,7 +858,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
                   : path.dirname(runtimePaths.versionDir),
               cause,
             }),
-        ),
+        }),
       );
       if (result.status === "skipped") {
         return yield* result.reason === "update-pending"

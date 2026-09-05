@@ -417,7 +417,38 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       });
       expect(yield* fs.exists(stale.versionDir)).toBe(false);
       expect(yield* fs.exists(previous.versionDir)).toBe(true);
+      expect(yield* fs.exists(path.join(baseDir, "runtime", "versions.lock"))).toBe(false);
       expect(commands).toEqual([]);
+    }),
+  );
+
+  it.effect("refuses to prune or reinstall while another live process holds the runtime lock", () =>
+    Effect.gen(function* () {
+      const { service, fs, baseDir, commands } = yield* makeHarness();
+      yield* service.install();
+      const path = yield* Path.Path;
+      const stale = pinnedRuntimePaths(path, baseDir, "1.2.1");
+      yield* fs.makeDirectory(path.dirname(stale.entryPath), { recursive: true });
+      yield* fs.writeFileString(stale.entryPath, "export {};\n");
+      yield* fs.writeFileString(stale.sentinelPath, "1.2.1\n");
+      // This test process is the holder, so the lock is never stale.
+      const lockPath = path.join(baseDir, "runtime", "versions.lock");
+      yield* fs.writeFileString(lockPath, `${process.pid}\n`);
+      commands.length = 0;
+
+      expect(yield* service.prune({ dryRun: false, keep: 0 }).pipe(Effect.flip)).toMatchObject({
+        _tag: "BootServiceBusyError",
+        lockPath,
+        pid: process.pid,
+      });
+      expect(yield* fs.exists(stale.versionDir)).toBe(true);
+
+      expect((yield* service.install({ allowDowngrade: true }).pipe(Effect.flip))._tag).toBe(
+        "BootServiceBusyError",
+      );
+      // The service was never stopped: the busy check runs before any unit command.
+      expect(commands).toEqual([]);
+      expect(yield* fs.exists(lockPath)).toBe(true);
     }),
   );
 

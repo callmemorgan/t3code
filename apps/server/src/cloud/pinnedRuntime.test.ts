@@ -12,10 +12,12 @@ import * as ProcessRunner from "../processRunner.ts";
 import {
   ensurePinnedRuntimeInstalled,
   pinnedRuntimePaths,
+  PinnedRuntimeBusyError,
   PinnedRuntimeInstallError,
   prunePinnedRuntimes,
   sweepManagedRuntimes,
   sweepPinnedRuntimes,
+  withPinnedRuntimeLock,
 } from "./pinnedRuntime.ts";
 import { SERVICE_LAUNCHER_PROTOCOL, type ServiceState } from "./serviceProtocol.ts";
 
@@ -431,6 +433,18 @@ it.layer(NodeServices.layer)("sweepManagedRuntimes", (it) => {
       });
       assert.isTrue(yield* fs.exists(stale.versionDir));
 
+      // Another live process holds the runtime lock: same contract.
+      yield* fs.writeFileString(path.join(baseDir, "runtime", "versions.lock"), `${process.pid}\n`);
+      yield* sweepManagedRuntimes({
+        managed: true,
+        baseDir,
+        retainedRuntimes: Effect.succeed(0),
+        fs,
+        path,
+      });
+      assert.isTrue(yield* fs.exists(stale.versionDir));
+      yield* fs.remove(path.join(baseDir, "runtime", "versions.lock"));
+
       // The state file cannot be read: same contract.
       const unreadable = FileSystem.makeNoop({
         readFileString: () =>
@@ -451,6 +465,72 @@ it.layer(NodeServices.layer)("sweepManagedRuntimes", (it) => {
         path,
       });
       assert.isTrue(yield* fs.exists(stale.versionDir));
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("withPinnedRuntimeLock", (it) => {
+  it.effect("refuses a second holder while the first is alive, then releases", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-runtime-lock-" });
+      const lockPath = path.join(baseDir, "runtime", "versions.lock");
+      let innerRan = false;
+
+      const contended = yield* withPinnedRuntimeLock(
+        { baseDir, fs, path, pid: 100, isProcessAlive: () => true },
+        Effect.gen(function* () {
+          assert.strictEqual((yield* fs.readFileString(lockPath)).trim(), "100");
+          return yield* withPinnedRuntimeLock(
+            { baseDir, fs, path, pid: 200, isProcessAlive: () => true },
+            Effect.sync(() => {
+              innerRan = true;
+            }),
+          ).pipe(Effect.flip);
+        }),
+      );
+
+      assert.instanceOf(contended, PinnedRuntimeBusyError);
+      assert.strictEqual(contended.pid, 100);
+      assert.strictEqual(contended.lockPath, lockPath);
+      assert.isFalse(innerRan);
+      assert.isFalse(yield* fs.exists(lockPath));
+    }),
+  );
+
+  it.effect("takes over a lock whose owner is gone", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-runtime-lock-stale-" });
+      const lockPath = path.join(baseDir, "runtime", "versions.lock");
+      yield* fs.makeDirectory(path.dirname(lockPath), { recursive: true });
+      yield* fs.writeFileString(lockPath, "4242\n");
+
+      const owner = yield* withPinnedRuntimeLock(
+        { baseDir, fs, path, pid: 7, isProcessAlive: (pid) => pid !== 4242 },
+        fs.readFileString(lockPath),
+      );
+
+      assert.strictEqual(owner.trim(), "7");
+      assert.isFalse(yield* fs.exists(lockPath));
+    }),
+  );
+
+  it.effect("releases the lock when the guarded effect fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-runtime-lock-fail-" });
+
+      const failure = yield* withPinnedRuntimeLock(
+        { baseDir, fs, path },
+        Effect.fail("boom" as const),
+      ).pipe(Effect.flip);
+
+      assert.strictEqual(failure, "boom");
+      assert.isFalse(yield* fs.exists(path.join(baseDir, "runtime", "versions.lock")));
     }),
   );
 });

@@ -313,6 +313,8 @@ export const recoverServiceOnboardingOffer = <R>(
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
       BootServiceDowngradeRefusedError: (error) =>
         Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
+      BootServiceBusyError: (error) =>
+        Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
     }),
   );
 
