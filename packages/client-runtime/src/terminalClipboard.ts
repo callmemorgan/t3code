@@ -52,7 +52,7 @@ function decodeClipboardPayload(osc: string): string | null {
   const target = osc.slice(3, separator);
   // Empty targets use the system clipboard. Queries never read or send the
   // client's clipboard to a PTY; application selection buffers stay local.
-  if (target !== "" && (!/^[cps0-7]+$/.test(target) || !target.includes("c"))) return null;
+  if (target !== "" && (!/^[cpqs0-7]+$/.test(target) || !target.includes("c"))) return null;
   const encoded = osc.slice(separator + 1);
   if (encoded === "") return "";
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return null;

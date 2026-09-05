@@ -7,6 +7,12 @@ function osc(text: string, target = "c", terminator = "\x07") {
 }
 
 describe("terminal OSC 52 clipboard writes", () => {
+  it.each(["qc", "cq", "cpqs01234567"])("copies combined clipboard target %s", (target) => {
+    const copy = vi.fn();
+    new TerminalClipboardParser(copy).write(osc("combined", target), true);
+    expect(copy.mock.calls).toEqual([["combined"]]);
+  });
+
   it.each(["", "\uFEFFtext", "\uFEFF"])("preserves exact clipboard text %j", (text) => {
     const copy = vi.fn();
     new TerminalClipboardParser(copy).write(osc(text), true);
@@ -40,6 +46,7 @@ describe("terminal OSC 52 clipboard writes", () => {
     "\x1b]52;c;bad!\x07",
     "\x1b]52;c;/w==\x07",
     osc("primary", "p"),
+    osc("secondary", "q"),
     "\x1b]0;title\x07",
   ])("ignores unsupported or malformed request %j and recovers", (data) => {
     const copy = vi.fn();
