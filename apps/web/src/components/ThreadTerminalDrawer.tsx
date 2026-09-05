@@ -582,6 +582,38 @@ export function TerminalViewport({
         terminal.focus();
       }
 
+      setupCleanups.push(
+        terminalEnvironment.observeAttach(
+          {
+            environmentId,
+            input: {
+              threadId,
+              terminalId,
+              cwd,
+              ...(worktreePath !== undefined ? { worktreePath } : {}),
+              ...(runtimeEnv ? { env: runtimeEnv } : {}),
+            },
+          },
+          (event) => {
+            switch (event.type) {
+              case "output":
+                terminal.writeClipboard(event.data);
+                break;
+              case "snapshot":
+              case "restarted":
+                terminal.resetClipboard(event.snapshot.history);
+                break;
+              case "cleared":
+              case "closed":
+              case "exited":
+              case "error":
+                terminal.resetClipboard();
+                break;
+            }
+          },
+        ),
+      );
+
       const dismissSelectionAction = (supersede = false) => {
         const ownsMenu =
           openSelectionMenuRequestIdRef.current === selectionActionRequestIdRef.current;

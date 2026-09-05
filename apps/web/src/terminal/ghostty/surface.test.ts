@@ -523,31 +523,47 @@ describe("GhosttyTerminalSurface visibility", () => {
     harness.pointer("pointerup", 45, 0);
   });
 
+  it("keeps a large live clipboard frame across display resynchronization without replaying it", async () => {
+    const harness = createHarness();
+    const copy = vi.fn();
+    const surface = await harness.create({ onClipboardWrite: copy });
+    surface.focus();
+    const text = "x".repeat(600 * 1024);
+    const frame = `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`;
+    surface.writeClipboard(frame.slice(0, -1));
+    surface.resetAndWrite(frame.slice(-100));
+    surface.writeClipboard(frame.slice(-1));
+    surface.write(frame);
+    surface.resetAndWrite(frame);
+    expect(copy.mock.calls).toEqual([[text, expect.any(Function)]]);
+    expect(copy.mock.calls[0]![1]()).toBe(true);
+  });
+
   it("copies live OSC 52 only from the focused, visible terminal in the active window", async () => {
     const harness = createHarness();
     const copy = vi.fn();
     const surface = await harness.create({ onClipboardWrite: copy });
     const data = "\x1b]52;c;aGVsbG8=\x07";
-    surface.write(data);
+    surface.writeClipboard(data);
     expect(copy).not.toHaveBeenCalled();
     surface.focus();
-    surface.resetAndWrite(data);
-    surface.resetAndWrite("\x1b]52;c;");
-    surface.write("aGVsbG8=\x07");
+    surface.resetClipboard(data);
+    surface.resetClipboard("\x1b]52;c;");
+    surface.writeClipboard("aGVsbG8=\x07");
     expect(copy).not.toHaveBeenCalled();
-    surface.write(data);
+    surface.writeClipboard(data);
     expect(copy.mock.calls).toEqual([["hello", expect.any(Function)]]);
     copy.mockClear();
     surface.setVisible(false);
-    surface.write(data);
+    surface.writeClipboard(data);
     surface.setVisible(true);
     surface.input.dispatchEvent(new Event("blur"));
-    surface.write(data);
+    surface.writeClipboard(data);
     surface.focus();
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    surface.write(data);
+    surface.writeClipboard(data);
     surface.dispose();
-    surface.write(data);
+    surface.writeClipboard(data);
     expect(copy).not.toHaveBeenCalled();
     expect(harness.onData).not.toHaveBeenCalled();
   });
@@ -560,7 +576,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       const surface = await harness.create({ onClipboardWrite: copy });
       const data = "\x1b]52;c;aGVsbG8=\x07";
       surface.focus();
-      surface.write(data.slice(0, -1));
+      surface.writeClipboard(data.slice(0, -1));
       switch (change) {
         case "hide":
           surface.setVisible(false);
@@ -575,9 +591,9 @@ describe("GhosttyTerminalSurface visibility", () => {
           window.dispatchEvent(new Event("focus"));
           break;
       }
-      surface.write(data.slice(-1));
+      surface.writeClipboard(data.slice(-1));
       expect(copy).not.toHaveBeenCalled();
-      surface.write(data);
+      surface.writeClipboard(data);
       expect(copy.mock.calls).toEqual([["hello", expect.any(Function)]]);
     },
   );
@@ -595,7 +611,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       const copy = vi.fn(writeTerminalClipboard);
       const surface = await harness.create({ onClipboardWrite: copy });
       surface.focus();
-      surface.write("\x1b]52;c;Zmlyc3Q=\x07\x1b]52;c;b2xk\x07");
+      surface.writeClipboard("\x1b]52;c;Zmlyc3Q=\x07\x1b]52;c;b2xk\x07");
       switch (change) {
         case "hide":
           surface.setVisible(false);
@@ -613,7 +629,7 @@ describe("GhosttyTerminalSurface visibility", () => {
           vi.spyOn(document, "hasFocus").mockReturnValue(false);
           break;
         case "reset":
-          surface.resetAndWrite("");
+          surface.resetClipboard("");
           break;
         case "dispose":
           surface.dispose();
@@ -623,7 +639,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       await Promise.all(copy.mock.results.map((result) => result.value));
       expect(writeText.mock.calls).toEqual([["first"]]);
       if (change !== "dispose" && change !== "inactive window") {
-        surface.write("\x1b]52;c;bmV3\x07");
+        surface.writeClipboard("\x1b]52;c;bmV3\x07");
         await Promise.all(copy.mock.results.map((result) => result.value));
         expect(writeText.mock.calls).toEqual([["first"], ["new"]]);
       }
@@ -706,7 +722,9 @@ describe("GhosttyTerminalSurface visibility", () => {
     const copy = vi.fn();
     const surface = await harness.create({ onClipboardWrite: copy });
     surface.focus();
-    surface.write("\x1bPtmux;\x1b\x1b]52;c;aGVsbG8=\x07visible\x1b\\");
+    const data = "\x1bPtmux;\x1b\x1b]52;c;aGVsbG8=\x07visible\x1b\\";
+    surface.writeClipboard(data);
+    surface.write(data);
     harness.flushFrame();
     expect(copy.mock.calls).toEqual([["hello", expect.any(Function)]]);
     expect(harness.renderedSnapshot.rowData[0]?.text).toContain("visible");

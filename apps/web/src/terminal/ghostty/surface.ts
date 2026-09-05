@@ -764,10 +764,23 @@ export class GhosttyTerminalSurface {
     this.fit();
   }
 
+  /** Feed live attachment output before renderer retention and batching. */
+  writeClipboard(data: string): void {
+    if (this.disposed) return;
+    this.clipboardParser.write(data, this.visible && this.focused && document.hasFocus());
+  }
+
+  /** Only session history/lifecycle resets revoke copies; display resynchronization does not. */
+  resetClipboard(history = ""): void {
+    if (this.disposed) return;
+    this.invalidateClipboardCopies();
+    this.clipboardParser.reset();
+    this.clipboardParser.write(history, false);
+  }
+
   write(data: string): void {
     if (this.disposed) return;
     this.core.write(data);
-    this.clipboardParser.write(data, this.visible && this.focused && document.hasFocus());
     this.synchronizeMouseTrackingState();
     // Restart the blink cycle from the visible phase so the cursor never sits
     // invisible through a stream of output or a burst of typing echo.
@@ -781,9 +794,6 @@ export class GhosttyTerminalSurface {
     this.clearSelection();
     this.lastMouseMotionData = "";
     this.core.resetAndWrite(data);
-    this.invalidateClipboardCopies();
-    this.clipboardParser.reset();
-    this.clipboardParser.write(data, false);
     this.synchronizeMouseTrackingState();
     // A replayed session starts from the visible phase like any other write:
     // reattaching mid-blink must not open on an invisible cursor.
