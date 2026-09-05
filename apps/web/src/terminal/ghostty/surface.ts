@@ -16,6 +16,7 @@ import {
 } from "./renderer";
 import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
 import { isMonospaceFamily } from "../../appearanceFonts";
+import { TerminalClipboardParser } from "./clipboard";
 
 export const DEFAULT_TERMINAL_FONT_SIZE = 12;
 const MIN_TERMINAL_FONT_SIZE = 6;
@@ -535,6 +536,7 @@ export interface GhosttyTerminalSurfaceOptions {
   readonly onData: (data: string) => void;
   readonly onResize: (cols: number, rows: number) => void;
   readonly onSelectionChange: () => void;
+  readonly onClipboardWrite?: (text: string) => void;
   readonly beforeKey: (event: KeyboardEvent) => boolean;
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
   /**
@@ -607,6 +609,9 @@ export class GhosttyTerminalSurface {
   private selectionClickSequence: TerminalSelectionClickSequence | null = null;
   private composing = false;
   private focused = false;
+  private readonly clipboardParser = new TerminalClipboardParser((text) => {
+    this.options.onClipboardWrite?.(text);
+  });
   private resizeNotified = false;
   private canvasConfigured = false;
   private theme: GhosttyTheme;
@@ -743,6 +748,7 @@ export class GhosttyTerminalSurface {
     if (!visible) {
       this.cancelRender();
       this.endSelectionDrag();
+      this.clipboardParser.invalidatePendingCopy();
       return;
     }
     this.fit();
@@ -751,6 +757,7 @@ export class GhosttyTerminalSurface {
   write(data: string): void {
     if (this.disposed) return;
     this.core.write(data);
+    this.clipboardParser.write(data, this.visible && this.focused && document.hasFocus());
     this.synchronizeMouseTrackingState();
     // Restart the blink cycle from the visible phase so the cursor never sits
     // invisible through a stream of output or a burst of typing echo.
@@ -764,6 +771,8 @@ export class GhosttyTerminalSurface {
     this.clearSelection();
     this.lastMouseMotionData = "";
     this.core.resetAndWrite(data);
+    this.clipboardParser.reset();
+    this.clipboardParser.write(data, false);
     this.synchronizeMouseTrackingState();
     // A replayed session starts from the visible phase like any other write:
     // reattaching mid-blink must not open on an invisible cursor.
@@ -1003,6 +1012,7 @@ export class GhosttyTerminalSurface {
     if (this.disposed) return;
     this.disposed = true;
     this.endSelectionDrag();
+    this.clipboardParser.reset();
     this.resizeObserver.disconnect();
     document.fonts.removeEventListener("loadingdone", this.onFontsLoaded);
     this.dprMedia?.removeEventListener("change", this.onDevicePixelRatioChange);
@@ -1160,6 +1170,7 @@ export class GhosttyTerminalSurface {
   private readonly onBlur = () => {
     this.focused = false;
     this.endSelectionDrag();
+    this.clipboardParser.invalidatePendingCopy();
     this.linkModifierActive = false;
     this.refreshHoveredLink();
     // Suppressions survive blur deliberately: a shortcut that moves focus (for
@@ -1173,6 +1184,7 @@ export class GhosttyTerminalSurface {
 
   private readonly onWindowBlur = () => {
     this.endSelectionDrag();
+    this.clipboardParser.invalidatePendingCopy();
   };
 
   private readonly onDevicePixelRatioChange = () => {

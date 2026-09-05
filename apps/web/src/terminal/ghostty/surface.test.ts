@@ -511,6 +511,65 @@ describe("GhosttyTerminalSurface visibility", () => {
     harness.pointer("pointerup", 45, 0);
   });
 
+  it("copies live OSC 52 only from the focused, visible terminal in the active window", async () => {
+    const harness = createHarness();
+    const copy = vi.fn();
+    const surface = await harness.create({ onClipboardWrite: copy });
+    const data = "\x1b]52;c;aGVsbG8=\x07";
+    surface.write(data);
+    expect(copy).not.toHaveBeenCalled();
+    surface.focus();
+    surface.resetAndWrite(data);
+    surface.resetAndWrite("\x1b]52;c;");
+    surface.write("aGVsbG8=\x07");
+    expect(copy).not.toHaveBeenCalled();
+    surface.write(data);
+    expect(copy.mock.calls).toEqual([["hello"]]);
+    copy.mockClear();
+    surface.setVisible(false);
+    surface.write(data);
+    surface.setVisible(true);
+    surface.input.dispatchEvent(new Event("blur"));
+    surface.write(data);
+    surface.focus();
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    surface.write(data);
+    surface.dispose();
+    surface.write(data);
+    expect(copy).not.toHaveBeenCalled();
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it.each(["hide", "input blur", "window blur"])(
+    "invalidates pending clipboard writes on %s even without intervening output",
+    async (change) => {
+      const harness = createHarness();
+      const copy = vi.fn();
+      const surface = await harness.create({ onClipboardWrite: copy });
+      const data = "\x1b]52;c;aGVsbG8=\x07";
+      surface.focus();
+      surface.write(data.slice(0, -1));
+      switch (change) {
+        case "hide":
+          surface.setVisible(false);
+          surface.setVisible(true);
+          break;
+        case "input blur":
+          surface.input.dispatchEvent(new Event("blur"));
+          surface.focus();
+          break;
+        case "window blur":
+          window.dispatchEvent(new Event("blur"));
+          window.dispatchEvent(new Event("focus"));
+          break;
+      }
+      surface.write(data.slice(-1));
+      expect(copy).not.toHaveBeenCalled();
+      surface.write(data);
+      expect(copy.mock.calls).toEqual([["hello"]]);
+    },
+  );
+
   it("uses the release position when a trackpad drag has no intermediate motion", async () => {
     const harness = createHarness();
     const surface = await harness.create();
@@ -542,6 +601,18 @@ describe("GhosttyTerminalSurface visibility", () => {
       expect(surface.getSelection()).toBe(selected);
     },
   );
+
+  it("agrees with Ghostty about leaving a control string before an OSC request", async () => {
+    const harness = createHarness();
+    const copy = vi.fn();
+    const surface = await harness.create({ onClipboardWrite: copy });
+    surface.focus();
+    surface.write("\x1bPtmux;\x1b\x1b]52;c;aGVsbG8=\x07visible\x1b\\");
+    harness.flushFrame();
+    expect(copy.mock.calls).toEqual([["hello"]]);
+    expect(harness.renderedSnapshot.rowData[0]?.text).toContain("visible");
+    expect(harness.renderedSnapshot.rowData[0]?.text).not.toContain("aGVsbG8");
+  });
 
   it("continues a native drag through fullscreen status redraws and clears it on reset", async () => {
     const harness = createHarness();
