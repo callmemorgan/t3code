@@ -196,57 +196,68 @@ it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
 });
 
 it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
-  it.effect("removes only completed, unreferenced runtimes older than the active version", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-runtime-prune-" });
-      const removable = yield* writeCompletedRuntime(fs, path, baseDir, "1.8.0");
-      const rollback = yield* writeCompletedRuntime(fs, path, baseDir, "1.9.0");
-      const active = yield* writeCompletedRuntime(fs, path, baseDir, "2.0.0");
-      const newer = yield* writeCompletedRuntime(fs, path, baseDir, "2.1.0");
-      const incomplete = pinnedRuntimePaths(path, baseDir, "1.7.0");
-      yield* fs.makeDirectory(incomplete.versionDir, { recursive: true });
-      const wrongSentinel = yield* writeCompletedRuntime(fs, path, baseDir, "1.6.0");
-      yield* fs.writeFileString(wrongSentinel.sentinelPath, "wrong-version\n");
-      const staging = path.join(path.dirname(active.versionDir), ".staging-install");
-      yield* fs.makeDirectory(staging);
-      const linkedTarget = yield* fs.makeTempDirectoryScoped({ prefix: "t3-runtime-link-target-" });
-      const linkedRuntime = pinnedRuntimePaths(path, baseDir, "1.5.0");
-      yield* fs.symlink(linkedTarget, linkedRuntime.versionDir);
+  it.effect(
+    "removes unreferenced older runtimes and leftovers, never anything newer, linked, or protected",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pinned-runtime-prune-" });
+        const removable = yield* writeCompletedRuntime(fs, path, baseDir, "1.8.0");
+        const rollback = yield* writeCompletedRuntime(fs, path, baseDir, "1.9.0");
+        const active = yield* writeCompletedRuntime(fs, path, baseDir, "2.0.0");
+        const newer = yield* writeCompletedRuntime(fs, path, baseDir, "2.1.0");
+        const incomplete = pinnedRuntimePaths(path, baseDir, "1.7.0");
+        yield* fs.makeDirectory(incomplete.versionDir, { recursive: true });
+        const wrongSentinel = yield* writeCompletedRuntime(fs, path, baseDir, "1.6.0");
+        yield* fs.writeFileString(wrongSentinel.sentinelPath, "wrong-version\n");
+        const staging = path.join(path.dirname(active.versionDir), ".staging-install");
+        yield* fs.makeDirectory(staging);
+        const linkedTarget = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-runtime-link-target-",
+        });
+        const linkedRuntime = pinnedRuntimePaths(path, baseDir, "1.5.0");
+        yield* fs.symlink(linkedTarget, linkedRuntime.versionDir);
 
-      const state = {
-        protocol: SERVICE_LAUNCHER_PROTOCOL,
-        activeVersion: "2.0.0",
-        update: {
-          id: "committed-update",
-          fromVersion: "1.9.0",
-          targetVersion: "2.0.0",
-          status: "committed",
-        },
-      } satisfies ServiceState;
+        const state = {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "2.0.0",
+          update: {
+            id: "committed-update",
+            fromVersion: "1.9.0",
+            targetVersion: "2.0.0",
+            status: "committed",
+          },
+        } satisfies ServiceState;
 
-      const prune = (dryRun: boolean) =>
-        prunePinnedRuntimes({ baseDir, state, keep: 1, dryRun, fs, path });
-      const preview = yield* prune(true);
-      assert.deepEqual(preview, { dryRun: true, versions: ["1.8.0"] });
-      assert.isTrue(yield* fs.exists(removable.versionDir));
+        // keep: 1 retains 1.9.0, the newest complete previous runtime. The two
+        // leftovers (no sentinel, wrong sentinel) go regardless and do not use
+        // up the retention slot.
+        const prune = (dryRun: boolean) =>
+          prunePinnedRuntimes({ baseDir, state, keep: 1, dryRun, fs, path });
+        const preview = yield* prune(true);
+        assert.deepEqual(preview, { dryRun: true, versions: ["1.6.0", "1.7.0", "1.8.0"] });
+        assert.isTrue(yield* fs.exists(removable.versionDir));
 
-      const pruned = yield* prune(false);
-      assert.deepEqual(pruned, { dryRun: false, versions: ["1.8.0"] });
-      assert.isFalse(yield* fs.exists(removable.versionDir));
-      for (const preserved of [
-        rollback.versionDir,
-        active.versionDir,
-        newer.versionDir,
-        incomplete.versionDir,
-        wrongSentinel.versionDir,
-        staging,
-        linkedRuntime.versionDir,
-      ]) {
-        assert.isTrue(yield* fs.exists(preserved));
-      }
-    }),
+        const pruned = yield* prune(false);
+        assert.deepEqual(pruned, { dryRun: false, versions: ["1.6.0", "1.7.0", "1.8.0"] });
+        for (const removed of [
+          removable.versionDir,
+          incomplete.versionDir,
+          wrongSentinel.versionDir,
+        ]) {
+          assert.isFalse(yield* fs.exists(removed));
+        }
+        for (const preserved of [
+          rollback.versionDir,
+          active.versionDir,
+          newer.versionDir,
+          staging,
+          linkedRuntime.versionDir,
+        ]) {
+          assert.isTrue(yield* fs.exists(preserved));
+        }
+      }),
   );
 
   it.effect("keeps the newest previous runtimes up to the retention count", () =>

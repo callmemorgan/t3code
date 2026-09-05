@@ -60,10 +60,12 @@ Every install under `versions/` is immutable and nothing else removes it, so the
 `retainedServerRuntimes` server setting (default 2) caps how many completed runtimes older than the
 active one stay on disk. `prunePinnedRuntimes` selects candidates from launcher-owned state. It never
 removes the active version, either version named by the latest update record, anything newer than
-the active version, incomplete installs, staging directories, symlinks, or unexpected directory
-names. Of the remaining completed older versions it keeps the newest `retainedServerRuntimes` and
-removes the rest. Restricting candidates to versions older than the active runtime keeps a
-concurrently staged forward-update target outside the prune set.
+the active version, staging directories, symlinks, or unexpected directory names. Of the remaining
+complete older versions it keeps the newest `retainedServerRuntimes` and removes the rest. Every
+published runtime carries its sentinel from the staging step, so an older version directory without
+a matching one is a leftover from a pre-staging install or an interrupted removal: it is removed as
+well and never counts toward the retention. Restricting candidates to versions older than the
+active runtime keeps a concurrently staged forward-update target outside the prune set.
 
 Two callers apply the count. A launcher-managed server sweeps once at startup, after `prepareTrial`
 settles, so a committed update cleans up behind itself and a restart applies a lowered count. The
@@ -76,11 +78,13 @@ and refuses while an update is pending. Neither stops or restarts the service.
 Pruning decides from one read of launcher state, and `t3 service update --allow-downgrade` is the
 one path that can move the active version backward, onto a runtime that read may already have
 marked for removal. `runtime/versions.lock` serializes them: the CLI install holds it from its
-first check of the pinned runtime until the unit is active, and both prune callers hold it around
-the sweep. The lock is an exclusively created file holding the owner's pid. A lock whose owner is
-gone is taken over; a lock whose owner is alive fails the command with `BootServiceBusyError`
-(the startup sweep logs a warning) rather than waiting. Remote updates do not take the lock: the
-launcher rejects backward targets, and pruning never touches versions newer than the active one.
+first check of the pinned runtime until the state and unit files are written, and releases it
+before starting the service so the new server's own sweep is not refused. Both prune callers hold
+it around the sweep; a dry run deletes nothing and runs unlocked. The lock is an exclusively created
+file holding the owner's pid. A lock whose owner is gone is renamed aside and taken over; a lock
+whose owner is alive fails the command with `BootServiceBusyError` (the startup sweep logs a
+warning) rather than waiting. Remote updates do not take the lock: the launcher rejects backward
+targets, and pruning never touches versions newer than the active one.
 
 ## Database Rollback
 

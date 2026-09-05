@@ -267,9 +267,12 @@ const processIsAlive = (pid: number): boolean => {
  * lock-free.
  *
  * The lock is a file created exclusively that holds its owner's pid. A lock
- * whose owner is gone is stale and taken over. A lock whose owner is alive
- * fails fast with PinnedRuntimeBusyError instead of waiting; the lock is not
- * reentrant.
+ * whose owner is gone is stale and taken over by renaming it aside first, so
+ * two contenders that both saw the dead owner race on the rename and the loser
+ * retries against the winner's fresh lock instead of deleting it. The window
+ * that remains needs a third process to take the lock between one contender's
+ * pid check and its rename. A lock whose owner is alive fails fast with
+ * PinnedRuntimeBusyError instead of waiting; the lock is not reentrant.
  */
 export const withPinnedRuntimeLock = <A, E, R>(
   input: {
@@ -313,7 +316,15 @@ export const withPinnedRuntimeLock = <A, E, R>(
               if ((holderPid !== undefined && isProcessAlive(holderPid)) || takeovers === 0) {
                 return yield* new PinnedRuntimeBusyError({ lockPath, pid: holderPid });
               }
-              yield* input.fs.remove(lockPath, { force: true });
+              const stalePath = `${lockPath}.stale-${pid}`;
+              yield* input.fs
+                .rename(lockPath, stalePath)
+                .pipe(
+                  Effect.catch((renameError) =>
+                    renameError.reason._tag === "NotFound" ? Effect.void : Effect.fail(renameError),
+                  ),
+                );
+              yield* input.fs.remove(stalePath, { force: true });
               return yield* claim(takeovers - 1);
             }),
       ),
@@ -330,11 +341,14 @@ export const withPinnedRuntimeLock = <A, E, R>(
 };
 
 /**
- * Removes completed runtimes older than the active one, keeping the newest
- * `keep` of them beside the active version. Never touches the active version,
+ * Removes runtimes older than the active one, keeping the newest `keep`
+ * complete ones beside the active version. Never touches the active version,
  * either version named by the latest update record, anything newer than the
- * active version (a concurrently staged forward-update target), incomplete
- * installs, staging directories, symlinks, or unexpected directory names.
+ * active version (a concurrently staged forward-update target), staging
+ * directories, symlinks, or unexpected directory names. Every published
+ * runtime carries its sentinel from the staging step, so an older version
+ * directory without a matching one is a leftover (a pre-staging install or an
+ * interrupted removal): it is removed but never counts toward `keep`.
  */
 export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(function* (input: {
   readonly baseDir: string;
@@ -357,41 +371,43 @@ export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(funct
   ]);
   const realVersionsDir = yield* input.fs.realPath(versionsDir);
   const entries = yield* input.fs.readDirectory(versionsDir);
-  const olderCompleted = yield* Effect.filter(entries, (version) =>
-    Effect.gen(function* () {
-      if (
-        !isExactServiceVersion(version) ||
-        compareExactServiceVersions(version, input.state.activeVersion) >= 0
-      ) {
-        return false;
-      }
-
-      const paths = pinnedRuntimePaths(input.path, input.baseDir, version);
-      const realVersionDir = yield* input.fs.realPath(paths.versionDir).pipe(Effect.option);
-      if (
-        Option.isNone(realVersionDir) ||
-        realVersionDir.value !== input.path.join(realVersionsDir, version)
-      ) {
-        return false;
-      }
-
-      const [entryExists, sentinel] = yield* Effect.all([
-        input.fs.exists(paths.entryPath),
-        input.fs.readFileString(paths.sentinelPath).pipe(Effect.option),
-      ]);
-      return entryExists && Option.isSome(sentinel) && sentinel.value.trim() === version;
-    }),
-  );
-  olderCompleted.sort((left, right) => {
-    const precedence = compareExactServiceVersions(left, right);
-    return precedence === 0 ? left.localeCompare(right) : precedence;
+  const older: Array<{ readonly version: string; readonly complete: boolean }> = [];
+  for (const version of entries) {
+    if (
+      !isExactServiceVersion(version) ||
+      compareExactServiceVersions(version, input.state.activeVersion) >= 0
+    ) {
+      continue;
+    }
+    const paths = pinnedRuntimePaths(input.path, input.baseDir, version);
+    const realVersionDir = yield* input.fs.realPath(paths.versionDir).pipe(Effect.option);
+    if (
+      Option.isNone(realVersionDir) ||
+      realVersionDir.value !== input.path.join(realVersionsDir, version)
+    ) {
+      continue;
+    }
+    const [entryExists, sentinel] = yield* Effect.all([
+      input.fs.exists(paths.entryPath),
+      input.fs.readFileString(paths.sentinelPath).pipe(Effect.option),
+    ]);
+    older.push({
+      version,
+      complete: entryExists && Option.isSome(sentinel) && sentinel.value.trim() === version,
+    });
+  }
+  older.sort((left, right) => {
+    const precedence = compareExactServiceVersions(left.version, right.version);
+    return precedence === 0 ? left.version.localeCompare(right.version) : precedence;
   });
-  // The newest previous runtimes count toward `keep` whether or not the
-  // update record already protects them, so "keep 2" reads as two versions.
-  const retained = new Set(olderCompleted.slice(Math.max(0, olderCompleted.length - input.keep)));
-  const versions = olderCompleted.filter(
-    (version) => !protectedVersions.has(version) && !retained.has(version),
-  );
+  // The newest complete previous runtimes count toward `keep` whether or not
+  // the update record already protects them, so "keep 2" reads as two usable
+  // versions. Leftovers are never usable and never counted.
+  const complete = older.filter((entry) => entry.complete).map((entry) => entry.version);
+  const retained = new Set(complete.slice(Math.max(0, complete.length - input.keep)));
+  const versions = older
+    .map((entry) => entry.version)
+    .filter((version) => !protectedVersions.has(version) && !retained.has(version));
 
   if (!input.dryRun) {
     yield* Effect.forEach(

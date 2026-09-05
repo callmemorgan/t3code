@@ -127,6 +127,9 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
 
   const commands: string[] = [];
   const timeouts = new Map<string, unknown>();
+  // Whether runtime/versions.lock existed while each unit command ran.
+  const lockHeldDuring = new Map<string, boolean>();
+  const lockPath = path.join(baseDir, "runtime", "versions.lock");
   const control: { failCommand: string | undefined; stateAfterStop?: string } = {
     failCommand: undefined,
   };
@@ -137,6 +140,7 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       const command = `${input.command} ${input.args.join(" ")}`;
       commands.push(command);
       timeouts.set(command, input.timeout);
+      lockHeldDuring.set(command, yield* fs.exists(lockPath).pipe(Effect.orDie));
       if (
         control.stateAfterStop !== undefined &&
         (command === "systemctl --user stop t3code.service" ||
@@ -182,7 +186,18 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       ),
     );
   const service = yield* makeService();
-  return { service, makeService, fs, baseDir, statePath, commands, timeouts, control };
+  return {
+    service,
+    makeService,
+    fs,
+    baseDir,
+    statePath,
+    lockPath,
+    lockHeldDuring,
+    commands,
+    timeouts,
+    control,
+  };
 });
 
 it.layer(NodeServices.layer)("boot service install", (it) => {
@@ -419,6 +434,31 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect(yield* fs.exists(previous.versionDir)).toBe(true);
       expect(yield* fs.exists(path.join(baseDir, "runtime", "versions.lock"))).toBe(false);
       expect(commands).toEqual([]);
+    }),
+  );
+
+  it.effect("holds the runtime lock through the service stop and releases it before starting", () =>
+    Effect.gen(function* () {
+      const { service, fs, lockPath, lockHeldDuring } = yield* makeHarness();
+      yield* service.install();
+      yield* service.install();
+
+      expect(lockHeldDuring.get("systemctl --user stop t3code.service")).toBe(true);
+      expect(lockHeldDuring.get("systemctl --user restart t3code.service")).toBe(false);
+      expect(yield* fs.exists(lockPath)).toBe(false);
+    }),
+  );
+
+  it.effect("previews without a service state, lock, or runtime directory on a bare machine", () =>
+    Effect.gen(function* () {
+      const { service, fs, baseDir } = yield* makeHarness();
+      const path = yield* Path.Path;
+      yield* fs.remove(path.join(baseDir, "runtime"), { recursive: true });
+
+      expect((yield* service.prune({ dryRun: true, keep: 1 }).pipe(Effect.flip))._tag).toBe(
+        "BootServicePruneStateError",
+      );
+      expect(yield* fs.exists(path.join(baseDir, "runtime"))).toBe(false);
     }),
   );
 

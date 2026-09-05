@@ -12,14 +12,17 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
 import * as ProcessRunner from "../processRunner.ts";
 import {
   ensurePinnedRuntimeInstalled,
   pinnedRuntimePaths,
+  type PinnedRuntimeBusyError,
   PinnedRuntimeInstallError,
   type PinnedRuntimePruneResult,
+  type PinnedRuntimeSweepResult,
   sweepPinnedRuntimes,
   withPinnedRuntimeLock,
 } from "./pinnedRuntime.ts";
@@ -740,14 +743,12 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         )}\n`,
       );
       yield* writeDurably(unitPath, manager.render(plan));
-
-      yield* runSteps(manager.activate);
     }).pipe(
       Effect.tapError(() =>
         installed ? runSteps(manager.restart).pipe(Effect.ignore) : Effect.void,
       ),
     );
-    return plan;
+    return installed;
   });
 
   const install = Effect.fn("cloud.boot_service.install")(function* (options?: {
@@ -759,9 +760,11 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
 
     // Hold the runtime lock from the first check of the pinned runtime until
-    // the unit is active, so a concurrent prune cannot remove the runtime this
-    // command selects (see withPinnedRuntimeLock).
-    return yield* withPinnedRuntimeLock(
+    // the state and unit files are written, so a concurrent prune cannot remove
+    // the runtime this command selects (see withPinnedRuntimeLock). Start the
+    // service only after releasing it: the new server sweeps runtimes as it
+    // boots and must not find this command still holding the lock.
+    const installed = yield* withPinnedRuntimeLock(
       { baseDir: input.baseDir, fs, path },
       installUnderLock(manager, options),
     ).pipe(
@@ -771,6 +774,12 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         PlatformError: (cause) => new BootServiceInstallError({ cause }),
       }),
     );
+    yield* runSteps(manager.activate).pipe(
+      Effect.tapError(() =>
+        installed ? runSteps(manager.restart).pipe(Effect.ignore) : Effect.void,
+      ),
+    );
+    return plan;
   });
 
   const uninstall: BootService["Service"]["uninstall"] = Effect.gen(function* () {
@@ -834,16 +843,22 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
 
   const prune: BootService["Service"]["prune"] = Effect.fn("cloud.boot_service.prune")(
     function* (options) {
-      const result = yield* withPinnedRuntimeLock(
-        { baseDir: input.baseDir, fs, path },
-        sweepPinnedRuntimes({
-          baseDir: input.baseDir,
-          keep: options.keep,
-          dryRun: options.dryRun,
-          fs,
-          path,
-        }),
-      ).pipe(
+      const sweep = sweepPinnedRuntimes({
+        baseDir: input.baseDir,
+        keep: options.keep,
+        dryRun: options.dryRun,
+        fs,
+        path,
+      });
+      // A dry run deletes nothing, so it runs unlocked and leaves no trace on a
+      // machine that has no service.
+      const guarded: Effect.Effect<
+        PinnedRuntimeSweepResult,
+        PinnedRuntimeBusyError | PlatformError.PlatformError
+      > = options.dryRun
+        ? sweep
+        : withPinnedRuntimeLock({ baseDir: input.baseDir, fs, path }, sweep);
+      const result = yield* guarded.pipe(
         Effect.catchTags({
           PinnedRuntimeBusyError: (error) =>
             new BootServiceBusyError({ lockPath: error.lockPath, pid: error.pid }),
