@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { TerminalClipboardParser } from "@t3tools/client-runtime/terminal-clipboard";
-import { writeTerminalClipboard } from "./clipboard";
+import { copyTerminalClipboardFromGesture, writeTerminalClipboard } from "./clipboard";
 
 function osc(text: string, target = "c", terminator = "\x07") {
   return `\x1b]52;${target};${Buffer.from(text).toString("base64")}${terminator}`;
@@ -163,6 +163,35 @@ describe("terminal OSC 52 clipboard writes", () => {
 
 describe("application clipboard writes", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each(["text", ""])("copies %j during a gesture and removes its copy handler", (text) => {
+    const setData = vi.fn();
+    const document = Object.assign(new EventTarget(), {
+      execCommand: () =>
+        document.dispatchEvent(
+          Object.assign(new Event("copy", { cancelable: true }), { clipboardData: { setData } }),
+        ),
+    });
+    vi.stubGlobal("document", document);
+    expect(setData).not.toHaveBeenCalled();
+    expect(copyTerminalClipboardFromGesture(text)).toBe(true);
+    expect(setData.mock.calls).toEqual([["text/plain", text]]);
+    document.execCommand();
+    expect(setData).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a blocked gesture without leaving a copy handler installed", () => {
+    const document = Object.assign(new EventTarget(), {
+      execCommand: () => {
+        throw new Error("denied");
+      },
+    });
+    vi.stubGlobal("document", document);
+    expect(copyTerminalClipboardFromGesture("blocked")).toBe(false);
+    const setData = vi.fn();
+    document.dispatchEvent(Object.assign(new Event("copy"), { clipboardData: { setData } }));
+    expect(setData).not.toHaveBeenCalled();
+  });
 
   it.each(["success", "denied"])(
     "serializes writes and keeps only the newest pending text after %s",

@@ -84,7 +84,11 @@ import { terminalEnvironment } from "../state/terminal";
 import { openTerminalLinkInPreview } from "./preview/openTerminalLinkInPreview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { preventTerminalCloseShortcut } from "../lib/terminalCloseShortcut";
-import { writeTerminalClipboard } from "../terminal/ghostty/clipboard";
+import {
+  copyTerminalClipboardFromGesture,
+  writeTerminalClipboard,
+} from "../terminal/ghostty/clipboard";
+import { toastManager } from "./ui/toast";
 import {
   resolveTerminalFontPreference,
   resolveTerminalFontSizePreference,
@@ -491,6 +495,8 @@ export function TerminalViewport({
 
     const setup = async (): Promise<(() => void) | null> => {
       const setupFont = terminalFontRef.current;
+      const clipboardToastId = `terminal-copy:${environmentId}:${threadId}:${terminalId}`;
+      setupCleanups.push(() => toastManager.close(clipboardToastId));
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
         theme: terminalThemeFromApp(mount),
         font: terminalFontOptions(setupFont.family, setupFont.size),
@@ -500,7 +506,30 @@ export function TerminalViewport({
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
-        onClipboardWrite: (text, canWrite) => void writeTerminalClipboard(text, canWrite),
+        onClipboardWrite: (text, canWrite) => {
+          if (typeof navigator.clipboard?.writeText === "function") {
+            void writeTerminalClipboard(text, canWrite);
+          } else if (canWrite()) {
+            toastManager.add({
+              id: clipboardToastId,
+              type: "info",
+              title: text === "" ? "Clear clipboard?" : "Terminal text ready to copy",
+              description: "Your browser needs a click to allow this clipboard write.",
+              timeout: 10_000,
+              actionProps: {
+                children: text === "" ? "Clear" : "Copy",
+                onClick: () => {
+                  if (copyTerminalClipboardFromGesture(text)) toastManager.close(clipboardToastId);
+                  else
+                    toastManager.update(clipboardToastId, {
+                      type: "error",
+                      title: "Clipboard write was blocked",
+                    });
+                },
+              },
+            });
+          }
+        },
         beforeKey: (event) => handleBeforeKey(event),
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
         // The surface listens from construction, so a right-click can land
