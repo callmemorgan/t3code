@@ -1,11 +1,14 @@
 import { useFocusEffect } from "@react-navigation/native";
-import { createTerminalClipboardWriter } from "@t3tools/client-runtime/terminal-clipboard";
+import { environmentRpcKey } from "@t3tools/client-runtime/state/runtime";
+import {
+  createTerminalClipboardSession,
+  createTerminalClipboardWriter,
+} from "@t3tools/client-runtime/terminal-clipboard";
 import type { EnvironmentId, TerminalAttachInput } from "@t3tools/contracts";
 import * as Clipboard from "expo-clipboard";
-import { useCallback, useLayoutEffect, useRef } from "react";
-import { AppState } from "react-native";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
+import { AppState, Platform } from "react-native";
 import { terminalEnvironment } from "../../state/terminal";
-import { createTerminalClipboardSession } from "./terminalClipboard";
 
 const writeClipboard = createTerminalClipboardWriter((text) => Clipboard.setStringAsync(text));
 
@@ -14,32 +17,49 @@ export function useTerminalClipboard(
   environmentId: EnvironmentId | null,
   input: TerminalAttachInput | null,
 ) {
-  const target = environmentId !== null && input !== null ? { environmentId, input } : null;
-  // Atom identity follows the attach values; recreating an input object must not reset a copy.
-  const attachment = target === null ? null : terminalEnvironment.attach(target);
+  const target = useMemo(
+    () => (environmentId !== null && input !== null ? { environmentId, input } : null),
+    [environmentId, input],
+  );
+  const targetKey = useMemo(() => (target === null ? null : environmentRpcKey(target)), [target]);
   const latestTarget = useRef(target);
   useLayoutEffect(() => {
-    latestTarget.current =
-      environmentId !== null && input !== null ? { environmentId, input } : null;
-  }, [environmentId, input]);
+    latestTarget.current = target;
+  }, [target]);
 
   useFocusEffect(
     useCallback(() => {
-      if (attachment === null || latestTarget.current === null) return;
-      const session = createTerminalClipboardSession(writeClipboard);
-      const stop = terminalEnvironment.observeAttach(latestTarget.current, session.update);
-      const activate = () => session.setActive(AppState.currentState === "active");
+      // The key, not the object, restarts the session: equal attach values
+      // recreated by a render must not drop a copy that is mid-sequence.
+      const target = targetKey === null ? null : latestTarget.current;
+      if (target === null) return;
+      let active = false;
+      const session = createTerminalClipboardSession({
+        isEligible: () => active,
+        onCopy: (text, canWrite) => void writeClipboard(text, canWrite),
+      });
+      const setActive = (next: boolean) => {
+        active = next;
+        if (!next) session.invalidate();
+      };
+      const stop = terminalEnvironment.observeAttach(target, session.update);
+      const activate = () => setActive(AppState.currentState === "active");
       activate();
       const change = AppState.addEventListener("change", activate);
-      const blur = AppState.addEventListener("blur", () => session.setActive(false));
-      const focus = AppState.addEventListener("focus", activate);
+      // Android can lose interaction focus without changing AppState (e.g. its notification drawer).
+      const blur =
+        Platform.OS === "android"
+          ? AppState.addEventListener("blur", () => setActive(false))
+          : undefined;
+      const focus =
+        Platform.OS === "android" ? AppState.addEventListener("focus", activate) : undefined;
       return () => {
-        session.setActive(false);
+        setActive(false);
         stop();
         change.remove();
-        blur.remove();
-        focus.remove();
+        blur?.remove();
+        focus?.remove();
       };
-    }, [attachment]),
+    }, [targetKey]),
   );
 }

@@ -9,6 +9,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -97,8 +98,12 @@ it.effect("observes live attach output before retention without another RPC subs
           Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
       } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
 
+      const logs: unknown[] = [];
       const runtime = Atom.runtime(
-        Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+        Layer.mergeAll(
+          Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
+          Logger.layer([Logger.make(({ message }) => logs.push(message))]),
+        ),
       );
       const atoms = createTerminalEnvironmentAtoms(runtime);
       const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
@@ -117,6 +122,10 @@ it.effect("observes live attach output before retention without another RPC subs
       };
       const observed: TerminalAttachStreamEvent[] = [];
       const unrelated: TerminalAttachStreamEvent[] = [];
+      const observerFailure = new Error("observer failed");
+      const stopBrokenObserver = atoms.observeAttach(target, () => {
+        throw observerFailure;
+      });
       const stop = atoms.observeAttach(target, (event) => observed.push(event));
       const stopOtherEnvironment = atoms.observeAttach(
         { ...target, environmentId: EnvironmentId.make("other") },
@@ -136,6 +145,7 @@ it.effect("observes live attach output before retention without another RPC subs
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           stop();
+          stopBrokenObserver();
           stopOtherEnvironment();
           stopOtherAttach();
           stopOtherProvider();
@@ -172,6 +182,7 @@ it.effect("observes live attach output before retention without another RPC subs
       expect(observed).toEqual([event]);
       expect(unrelated).toEqual([]);
       expect(subscriptions).toBe(1);
+      expect(logs).toContainEqual(["Terminal attach observer failed", observerFailure]);
     }),
   ),
 );

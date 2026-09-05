@@ -15,7 +15,6 @@ import {
   environmentRpcKey,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import {
   applyTerminalAttachStreamEvent,
@@ -46,20 +45,24 @@ export function createTerminalEnvironmentAtoms<R, E>(
   const attachObservers = new Map<string, Set<(event: TerminalAttachStreamEvent) => void>>();
   const attach = createEnvironmentSubscriptionAtomFamily(runtime, {
     label: "environment-data:terminal:attach",
-    subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          const supervisor = yield* EnvironmentSupervisor;
-          const key = environmentRpcKey({ environmentId: supervisor.target.environmentId, input });
-          return subscribe(WS_METHODS.terminalAttach, input).pipe(
-            Stream.map((event) => {
+    subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>, key) =>
+      Stream.suspend(() =>
+        subscribe(WS_METHODS.terminalAttach, input).pipe(
+          Stream.tap((event) =>
+            Effect.gen(function* () {
               const observers = attachObservers.get(key);
-              if (observers) for (const observe of observers) observe(event);
-              return event;
+              if (!observers) return;
+              for (const observe of observers) {
+                try {
+                  observe(event);
+                } catch (error) {
+                  yield* Effect.logError("Terminal attach observer failed", error);
+                }
+              }
             }),
-            Stream.scan(nextTerminalAttachSeedState(), applyTerminalAttachStreamEvent),
-          );
-        }),
+          ),
+          Stream.scan(nextTerminalAttachSeedState(), applyTerminalAttachStreamEvent),
+        ),
       ),
   });
   return {

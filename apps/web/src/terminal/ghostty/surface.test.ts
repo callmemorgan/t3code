@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { ThreadId, type TerminalAttachStreamEvent } from "@t3tools/contracts";
 
 import { writeTerminalClipboard } from "./clipboard";
 import { GhosttyTerminalCore, type GhosttyCell, type GhosttyRow } from "./core";
@@ -40,6 +41,28 @@ vi.mock("./vendor/ghostty-vt.wasm?url", async () => ({
 vi.mock("./vendor/ghostty-write-pty.wasm?url&no-inline", async () => ({
   default: (await import("./vendor/ghostty-write-pty.wasm?inline")).default,
 }));
+
+const clipboardTarget = { threadId: ThreadId.make("thread"), terminalId: "terminal" };
+const clipboardOutput = (data: string): TerminalAttachStreamEvent => ({
+  type: "output",
+  ...clipboardTarget,
+  data,
+});
+const clipboardSnapshot = (history: string): TerminalAttachStreamEvent => ({
+  type: "snapshot",
+  snapshot: {
+    ...clipboardTarget,
+    cwd: "/tmp",
+    worktreePath: null,
+    status: "running",
+    pid: 1,
+    history,
+    exitCode: null,
+    exitSignal: null,
+    label: "Terminal 1",
+    updatedAt: "2026-09-05T00:00:00Z",
+  },
+});
 
 describe("GhosttyTerminalSurface visibility", () => {
   const surfaces = new Set<GhosttyTerminalSurface>();
@@ -177,22 +200,30 @@ describe("GhosttyTerminalSurface visibility", () => {
         buttons: number,
         shiftKey = false,
         clientY = 5,
-        button = 0,
+        options: Partial<PointerEvent> = {},
       ) {
         canvas.dispatchEvent(
           Object.assign(new Event(type, { cancelable: true }), {
             clientX,
             clientY,
             pointerId: 1,
-            button,
+            button: 0,
             buttons,
             shiftKey,
+            ...options,
           }),
         );
       },
-      loseCapture() {
+      loseCapture(clientX = 5, clientY = 5) {
         canvas.releasePointerCapture(1);
-        canvas.dispatchEvent(Object.assign(new Event("lostpointercapture"), { pointerId: 1 }));
+        canvas.dispatchEvent(
+          Object.assign(new Event("lostpointercapture"), {
+            pointerId: 1,
+            clientX,
+            clientY,
+            buttons: 0,
+          }),
+        );
       },
       wheel(deltaY = 1, deltaMode = 1) {
         canvas.dispatchEvent(
@@ -390,7 +421,7 @@ describe("GhosttyTerminalSurface visibility", () => {
     surface.write("hello world");
     harness.flushFrame();
     harness.pointer("pointerdown", 5, 1);
-    harness.pointer("pointercancel", 5, 0, false, 5, -1);
+    harness.pointer("pointercancel", 5, 0, false, 5, { button: -1 });
     expect(surface.getSelection()).toBe("");
     expect(surface.getSelectionPosition()).toBeNull();
   });
@@ -401,13 +432,46 @@ describe("GhosttyTerminalSurface visibility", () => {
     surface.write("\x1b[?1002h\x1b[?1006hhello world");
     harness.flushFrame();
     harness.pointer("pointerdown", 5, 1);
-    harness.loseCapture();
+    harness.loseCapture(37);
+    expect(harness.onData.mock.calls).toEqual([["\x1b[<0;1;1M"], ["\x1b[<0;5;1m"]]);
+    harness.pointer("pointerup", 37, 0);
+    expect(harness.onData).toHaveBeenCalledTimes(2);
     harness.onData.mockClear();
     harness.pointer("pointerdown", 5, 1, true);
     harness.pointer("pointermove", 37, 1, true);
     harness.pointer("pointerup", 37, 0, true);
     expect(surface.getSelection()).toBe("hello");
     expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it("recognizes input focus acquired before asynchronous surface setup finishes", async () => {
+    const harness = createHarness();
+    const createElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag) => {
+      const element = createElement(tag);
+      if (tag === "textarea")
+        Object.defineProperty(document, "activeElement", { value: element, configurable: true });
+      return element;
+    });
+    const copy = vi.fn();
+    const surface = await harness.create({ onClipboardWrite: copy });
+    surface.observeClipboard(clipboardOutput("\x1b]52;c;aGVsbG8=\x07"));
+    expect(copy).toHaveBeenCalledWith("hello", expect.any(Function));
+  });
+
+  it.each([1002, 1003])("keeps one application pointer owner in mouse mode %s", async (mode) => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write(`\x1b[?${mode}h\x1b[?1006hhello world`);
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.onData.mockClear();
+    harness.pointer("pointerdown", 37, 1, false, 5, { pointerId: 2 });
+    harness.pointer("pointermove", 45, 1, false, 5, { pointerId: 2 });
+    harness.pointer("pointerup", 45, 0, false, 5, { pointerId: 2 });
+    expect(harness.onData).not.toHaveBeenCalled();
+    harness.pointer("pointerup", 5, 0);
+    expect(harness.onData.mock.calls).toEqual([["\x1b[<0;1;1m"]]);
   });
 
   it("only repaints the cursor row for an application mouse press without selection", async () => {
@@ -434,10 +498,10 @@ describe("GhosttyTerminalSurface visibility", () => {
     harness.pointer("pointerdown", 5, 1);
     harness.pointer("pointermove", 37, 1);
     // Chorded button changes arrive as pointermove until the final release.
-    harness.pointer("pointermove", 37, 3, false, 5, 2);
-    harness.pointer("pointermove", 37, 2, false, 5, 0);
+    harness.pointer("pointermove", 37, 3, false, 5, { button: 2 });
+    harness.pointer("pointermove", 37, 2, false, 5, { button: 0 });
     harness.pointer("pointermove", 85, 2);
-    harness.pointer("pointerup", 85, 0, false, 5, 2);
+    harness.pointer("pointerup", 85, 0, false, 5, { button: 2 });
     expect(surface.getSelection()).toBe("hello");
   });
 
@@ -632,9 +696,9 @@ describe("GhosttyTerminalSurface visibility", () => {
     surface.focus();
     const text = "x".repeat(600 * 1024);
     const frame = `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`;
-    surface.writeClipboard(frame.slice(0, -1));
+    surface.observeClipboard(clipboardOutput(frame.slice(0, -1)));
     surface.resetAndWrite(frame.slice(-100));
-    surface.writeClipboard(frame.slice(-1));
+    surface.observeClipboard(clipboardOutput(frame.slice(-1)));
     surface.write(frame);
     surface.resetAndWrite(frame);
     expect(copy.mock.calls).toEqual([[text, expect.any(Function)]]);
@@ -646,26 +710,26 @@ describe("GhosttyTerminalSurface visibility", () => {
     const copy = vi.fn();
     const surface = await harness.create({ onClipboardWrite: copy });
     const data = "\x1b]52;c;aGVsbG8=\x07";
-    surface.writeClipboard(data);
+    surface.observeClipboard(clipboardOutput(data));
     expect(copy).not.toHaveBeenCalled();
     surface.focus();
-    surface.resetClipboard(data);
-    surface.resetClipboard("\x1b]52;c;");
-    surface.writeClipboard("aGVsbG8=\x07");
+    surface.observeClipboard(clipboardSnapshot(data));
+    surface.observeClipboard(clipboardSnapshot("\x1b]52;c;"));
+    surface.observeClipboard(clipboardOutput("aGVsbG8=\x07"));
     expect(copy).not.toHaveBeenCalled();
-    surface.writeClipboard(data);
+    surface.observeClipboard(clipboardOutput(data));
     expect(copy.mock.calls).toEqual([["hello", expect.any(Function)]]);
     copy.mockClear();
     surface.setVisible(false);
-    surface.writeClipboard(data);
+    surface.observeClipboard(clipboardOutput(data));
     surface.setVisible(true);
     surface.input.dispatchEvent(new Event("blur"));
-    surface.writeClipboard(data);
+    surface.observeClipboard(clipboardOutput(data));
     surface.focus();
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    surface.writeClipboard(data);
+    surface.observeClipboard(clipboardOutput(data));
     surface.dispose();
-    surface.writeClipboard(data);
+    surface.observeClipboard(clipboardOutput(data));
     expect(copy).not.toHaveBeenCalled();
     expect(harness.onData).not.toHaveBeenCalled();
   });
@@ -678,7 +742,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       const surface = await harness.create({ onClipboardWrite: copy });
       const data = "\x1b]52;c;aGVsbG8=\x07";
       surface.focus();
-      surface.writeClipboard(data.slice(0, -1));
+      surface.observeClipboard(clipboardOutput(data.slice(0, -1)));
       switch (change) {
         case "hide":
           surface.setVisible(false);
@@ -693,9 +757,9 @@ describe("GhosttyTerminalSurface visibility", () => {
           window.dispatchEvent(new Event("focus"));
           break;
       }
-      surface.writeClipboard(data.slice(-1));
+      surface.observeClipboard(clipboardOutput(data.slice(-1)));
       expect(copy).not.toHaveBeenCalled();
-      surface.writeClipboard(data);
+      surface.observeClipboard(clipboardOutput(data));
       expect(copy.mock.calls).toEqual([["hello", expect.any(Function)]]);
     },
   );
@@ -713,7 +777,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       const copy = vi.fn(writeTerminalClipboard);
       const surface = await harness.create({ onClipboardWrite: copy });
       surface.focus();
-      surface.writeClipboard("\x1b]52;c;Zmlyc3Q=\x07\x1b]52;c;b2xk\x07");
+      surface.observeClipboard(clipboardOutput("\x1b]52;c;Zmlyc3Q=\x07\x1b]52;c;b2xk\x07"));
       switch (change) {
         case "hide":
           surface.setVisible(false);
@@ -731,7 +795,7 @@ describe("GhosttyTerminalSurface visibility", () => {
           vi.spyOn(document, "hasFocus").mockReturnValue(false);
           break;
         case "reset":
-          surface.resetClipboard("");
+          surface.observeClipboard(clipboardSnapshot(""));
           break;
         case "dispose":
           surface.dispose();
@@ -741,7 +805,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       await Promise.all(copy.mock.results.map((result) => result.value));
       expect(writeText.mock.calls).toEqual([["first"]]);
       if (change !== "dispose" && change !== "inactive window") {
-        surface.writeClipboard("\x1b]52;c;bmV3\x07");
+        surface.observeClipboard(clipboardOutput("\x1b]52;c;bmV3\x07"));
         await Promise.all(copy.mock.results.map((result) => result.value));
         expect(writeText.mock.calls).toEqual([["first"], ["new"]]);
       }
@@ -825,7 +889,7 @@ describe("GhosttyTerminalSurface visibility", () => {
     const surface = await harness.create({ onClipboardWrite: copy });
     surface.focus();
     const data = "\x1bPtmux;\x1b\x1b]52;c;aGVsbG8=\x07visible\x1b\\";
-    surface.writeClipboard(data);
+    surface.observeClipboard(clipboardOutput(data));
     surface.write(data);
     harness.flushFrame();
     expect(copy.mock.calls).toEqual([["hello", expect.any(Function)]]);

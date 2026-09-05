@@ -145,9 +145,9 @@ function parseTerminalColor(value: string, fallback: GhosttyColor): GhosttyColor
   };
 }
 
-function runtimeEnvSignature(runtimeEnv: Record<string, string> | undefined): string {
-  if (!runtimeEnv) return "";
-  return JSON.stringify(
+function normalizeRuntimeEnv(runtimeEnv: Record<string, string> | undefined) {
+  if (!runtimeEnv) return undefined;
+  return Object.fromEntries(
     Object.entries(runtimeEnv)
       .filter(([key, value]) => key.length > 0 && typeof value === "string")
       .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)),
@@ -381,7 +381,10 @@ export function TerminalViewport({
   // cannot be mistaken for the active flow.
   const openSelectionMenuRequestIdRef = useRef<number | null>(null);
   const keybindingsRef = useRef(keybindings);
-  const runtimeEnvKey = useMemo(() => runtimeEnvSignature(runtimeEnv), [runtimeEnv]);
+  const [terminalEnv, runtimeEnvKey] = useMemo(() => {
+    const env = normalizeRuntimeEnv(runtimeEnv);
+    return [env, env ? JSON.stringify(env) : ""] as const;
+  }, [runtimeEnv]);
   const handleSessionExited = useEffectEvent(() => {
     onSessionExited();
   });
@@ -405,16 +408,17 @@ export function TerminalViewport({
     }),
   );
   const terminalFontRef = useRef({ family: terminalFontFamily, size: terminalFontSize });
+  const terminalAttachInput = {
+    threadId,
+    terminalId,
+    cwd,
+    ...(worktreePath !== undefined ? { worktreePath } : {}),
+    ...(terminalEnv ? { env: terminalEnv } : {}),
+    ...(providerInstanceId ? { providerInstanceId } : {}),
+  };
   const terminalSession = useAttachedTerminalSession({
     environmentId,
-    terminal: {
-      threadId,
-      terminalId,
-      cwd,
-      ...(worktreePath !== undefined ? { worktreePath } : {}),
-      ...(runtimeEnv ? { env: runtimeEnv } : {}),
-      ...(providerInstanceId ? { providerInstanceId } : {}),
-    },
+    terminal: terminalAttachInput,
   });
   const writeTerminal = useEffectEvent((data: string) =>
     runTerminalWrite({
@@ -495,7 +499,6 @@ export function TerminalViewport({
     const setup = async (): Promise<(() => void) | null> => {
       const setupFont = terminalFontRef.current;
       const clipboardToastId = `terminal-copy:${environmentId}:${threadId}:${terminalId}`;
-      setupCleanups.push(() => toastManager.close(clipboardToastId));
       let clipboardRequest = 0;
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
         theme: terminalThemeFromApp(mount),
@@ -546,6 +549,7 @@ export function TerminalViewport({
         terminal.dispose();
         return null;
       }
+      setupCleanups.push(() => toastManager.close(clipboardToastId));
       terminal.setVisible(visibleRef.current);
       // The theme observer is not installed yet, so re-read the theme in case
       // the app toggled light/dark while the WASM surface was loading.
@@ -582,35 +586,8 @@ export function TerminalViewport({
       }
 
       setupCleanups.push(
-        terminalEnvironment.observeAttach(
-          {
-            environmentId,
-            input: {
-              threadId,
-              terminalId,
-              cwd,
-              ...(worktreePath !== undefined ? { worktreePath } : {}),
-              ...(runtimeEnv ? { env: runtimeEnv } : {}),
-              ...(providerInstanceId ? { providerInstanceId } : {}),
-            },
-          },
-          (event) => {
-            switch (event.type) {
-              case "output":
-                terminal.writeClipboard(event.data);
-                break;
-              case "snapshot":
-              case "restarted":
-                terminal.resetClipboard(event.snapshot.history);
-                break;
-              case "cleared":
-              case "closed":
-              case "exited":
-              case "error":
-                terminal.resetClipboard();
-                break;
-            }
-          },
+        terminalEnvironment.observeAttach({ environmentId, input: terminalAttachInput }, (event) =>
+          terminal.observeClipboard(event),
         ),
       );
 

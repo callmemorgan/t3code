@@ -1,3 +1,5 @@
+import type { TerminalAttachStreamEvent } from "@t3tools/contracts";
+
 // Bound retained OSC text independently of terminal scrollback.
 const MAX_OSC_LENGTH = 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -67,13 +69,20 @@ function decodeClipboardPayload(osc: string): string | null {
   if (encoded === "") return "";
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return null;
   try {
-    return decoder.decode(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0)));
+    const binary = atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return decoder.decode(bytes);
   } catch {
     return null;
   }
 }
 
-/** Observes 7-bit OSC framing in live output independently of native renderer replays. */
+/**
+ * Observes 7-bit OSC framing in live output independently of native renderer replays.
+ * libghostty parses OSC payloads only after the caller has framed them, so the
+ * framing lives here for both clients.
+ */
 export class TerminalClipboardParser {
   private state: "ground" | "escape" | "osc" | "oscEscape" = "ground";
   // Null means this sequence has no clipboard payload worth retaining.
@@ -146,11 +155,14 @@ export class TerminalClipboardParser {
             const control = oscControl.exec(data);
             const length = (control?.index ?? data.length) - index;
             if (this.payload !== null) {
-              if (this.payload.length + length <= MAX_OSC_LENGTH) {
-                this.payload += data.slice(index, index + length);
-                if (!"52;".startsWith(this.payload.slice(0, 3))) this.payload = null;
-              } else {
+              if (this.payload.length + length > MAX_OSC_LENGTH) {
                 this.payload = null;
+              } else {
+                // Only the first three characters can disqualify the request. Checking
+                // later would flatten the whole accumulated payload on every append.
+                const checkPrefix = this.payload.length < 3;
+                this.payload += data.slice(index, index + length);
+                if (checkPrefix && !"52;".startsWith(this.payload.slice(0, 3))) this.payload = null;
               }
             }
             index += length - 1;
@@ -175,4 +187,53 @@ export class TerminalClipboardParser {
     this.reset();
     if (text !== null) this.onWrite(text);
   }
+}
+
+/**
+ * One client surface's live-copy policy over the parser: output copies only while
+ * the surface is eligible, history never does, and copies parsed or queued before
+ * the surface lost eligibility are revoked.
+ */
+export function createTerminalClipboardSession(options: {
+  /** Read when output arrives and again before a queued write reaches the clipboard. */
+  readonly isEligible: () => boolean;
+  readonly onCopy: (text: string, canWrite: () => boolean) => void;
+}) {
+  let generation = 0;
+  const parser = new TerminalClipboardParser((text) => {
+    const requested = generation;
+    options.onCopy(text, () => generation === requested && options.isEligible());
+  });
+  const reset = (history = "") => {
+    generation += 1;
+    parser.reset();
+    parser.write(history, false);
+  };
+  return {
+    /** Revokes copies on focus or visibility loss without losing VT framing. */
+    invalidate(): void {
+      generation += 1;
+      parser.invalidatePendingCopy();
+    },
+    /** Session history and lifecycle events revoke copies; display resynchronization does not. */
+    update(event: TerminalAttachStreamEvent): void {
+      switch (event.type) {
+        case "output":
+          parser.write(event.data, options.isEligible());
+          break;
+        case "snapshot":
+        case "restarted":
+          reset(event.snapshot.history);
+          break;
+        case "cleared":
+        case "closed":
+        case "exited":
+        case "error":
+          reset();
+          break;
+        case "activity":
+          break;
+      }
+    },
+  };
 }
