@@ -11,7 +11,7 @@ const osc = (text: string) => `\x1b]52;c;${Buffer.from(text).toString("base64")}
 
 function harness(writeText = vi.fn(async (_text: string) => {})) {
   const write = createTerminalClipboardWriter(writeText);
-  const pending: Promise<void>[] = [];
+  const pending: Promise<unknown>[] = [];
   const session = createTerminalClipboardSession((text, canWrite) => {
     const result = write(text, canWrite);
     pending.push(result);

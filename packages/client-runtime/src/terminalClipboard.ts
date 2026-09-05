@@ -4,6 +4,8 @@ const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 // oxlint-disable-next-line no-control-regex -- C0 bytes are handled by the outer VT parser.
 const oscControl = /[\x00-\x1f]/g;
 
+type ClipboardWriteResult = "written" | "failed" | "skipped";
+
 /** Shares one serialized writer per client, with at most one pending clipboard payload. */
 export function createTerminalClipboardWriter(
   writeText: (text: string) => Promise<unknown> | undefined,
@@ -14,15 +16,15 @@ export function createTerminalClipboardWriter(
   let pendingClipboardWrite: {
     text: string;
     canWrite: () => boolean;
-    resolve: () => void;
+    resolve: (result: ClipboardWriteResult) => void;
   } | null = null;
 
   function writeTerminalClipboard(
     text: string,
     canWrite: () => boolean = () => true,
-  ): Promise<void> {
+  ): Promise<ClipboardWriteResult> {
     return new Promise((resolve) => {
-      pendingClipboardWrite?.resolve();
+      pendingClipboardWrite?.resolve("skipped");
       pendingClipboardWrite = { text, canWrite, resolve };
       if (!writingClipboard) void drainClipboardWrites();
     });
@@ -33,12 +35,20 @@ export function createTerminalClipboardWriter(
     while (pendingClipboardWrite) {
       const request = pendingClipboardWrite;
       pendingClipboardWrite = null;
+      let result: ClipboardWriteResult = "skipped";
       try {
-        if (request.canWrite()) await writeText(request.text);
+        if (request.canWrite()) {
+          const write = writeText(request.text);
+          if (write === undefined) result = "failed";
+          else {
+            await write;
+            result = "written";
+          }
+        }
       } catch {
-        // Clipboard failures must not write errors into the TUI or block later copies.
+        result = "failed";
       }
-      request.resolve();
+      request.resolve(result);
     }
     writingClipboard = false;
   }

@@ -497,6 +497,7 @@ export function TerminalViewport({
       const setupFont = terminalFontRef.current;
       const clipboardToastId = `terminal-copy:${environmentId}:${threadId}:${terminalId}`;
       setupCleanups.push(() => toastManager.close(clipboardToastId));
+      let clipboardRequest = 0;
       const terminalOptions: GhosttyTerminalSurfaceOptions = {
         theme: terminalThemeFromApp(mount),
         font: terminalFontOptions(setupFont.family, setupFont.size),
@@ -506,10 +507,12 @@ export function TerminalViewport({
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
-        onClipboardWrite: (text, canWrite) => {
-          if (typeof navigator.clipboard?.writeText === "function") {
-            void writeTerminalClipboard(text, canWrite);
-          } else if (canWrite()) {
+        onClipboardWrite: async (text, canWrite) => {
+          const request = ++clipboardRequest;
+          const result = await writeTerminalClipboard(text, canWrite);
+          if (request !== clipboardRequest || !canWrite()) return;
+          if (result === "written") toastManager.close(clipboardToastId);
+          else if (result === "failed") {
             toastManager.add({
               id: clipboardToastId,
               type: "info",

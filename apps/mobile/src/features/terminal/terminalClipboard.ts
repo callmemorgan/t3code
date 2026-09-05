@@ -7,7 +7,7 @@ import {
 
 /** Observe the subscription's live chunks, never a native renderer's history replay. */
 export function createTerminalClipboardSession(
-  write: (text: string, canWrite: () => boolean) => Promise<void>,
+  write: (text: string, canWrite: () => boolean) => Promise<unknown>,
 ) {
   let active = false;
   let generation = 0;

@@ -223,7 +223,11 @@ describe("application clipboard writes", () => {
       ];
       const callsWhilePending = [...writeText.mock.calls];
       finishFirst();
-      await Promise.all(writes);
+      expect(await Promise.all(writes)).toEqual([
+        result === "denied" ? "failed" : "written",
+        "skipped",
+        "written",
+      ]);
       expect(callsWhilePending).toEqual([["first"]]);
       expect(writeText.mock.calls).toEqual([["first"], ["last"]]);
       expect(clipboard).toBe("last");
@@ -240,7 +244,10 @@ describe("application clipboard writes", () => {
       const execCommand = vi.fn();
       vi.stubGlobal("navigator", result === "unavailable" ? {} : { clipboard: { writeText } });
       vi.stubGlobal("document", { createElement, execCommand });
-      await expect(writeTerminalClipboard("application text")).resolves.toBeUndefined();
+      await expect(writeTerminalClipboard("application text")).resolves.toBe(
+        result === "success" ? "written" : "failed",
+      );
+      await expect(writeTerminalClipboard("inactive", () => false)).resolves.toBe("skipped");
       expect(writeText.mock.calls).toEqual(result === "unavailable" ? [] : [["application text"]]);
       expect(createElement).not.toHaveBeenCalled();
       expect(execCommand).not.toHaveBeenCalled();
