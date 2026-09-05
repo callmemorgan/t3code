@@ -6,6 +6,12 @@ function osc(text: string, target = "c", terminator = "\x07") {
 }
 
 describe("terminal OSC 52 clipboard writes", () => {
+  it.each(["\uFEFFtext", "\uFEFF"])("preserves leading U+FEFF in %j", (text) => {
+    const copy = vi.fn();
+    new TerminalClipboardParser(copy).write(osc(text), true);
+    expect(copy.mock.calls).toEqual([[text]]);
+  });
+
   it.each(["\x07", "\x1b\\"])(
     "decodes Unicode with terminator %j at every chunk boundary",
     (end) => {
@@ -157,6 +163,36 @@ describe("terminal OSC 52 clipboard writes", () => {
 
 describe("application clipboard writes", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each(["success", "denied"])(
+    "serializes writes and keeps only the newest pending text after %s",
+    async (result) => {
+      let finishFirst!: () => void;
+      const first = new Promise<void>((resolve) => {
+        finishFirst = resolve;
+      });
+      let clipboard = "";
+      const writeText = vi.fn(async (text: string) => {
+        if (text === "first") {
+          await first;
+          if (result === "denied") throw new Error("NotAllowedError");
+        }
+        clipboard = text;
+      });
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const writes = [
+        writeTerminalClipboard("first"),
+        writeTerminalClipboard("superseded"),
+        writeTerminalClipboard("last"),
+      ];
+      const callsWhilePending = [...writeText.mock.calls];
+      finishFirst();
+      await Promise.all(writes);
+      expect(callsWhilePending).toEqual([["first"]]);
+      expect(writeText.mock.calls).toEqual([["first"], ["last"]]);
+      expect(clipboard).toBe("last");
+    },
+  );
 
   it.each(["success", "denied", "unavailable"])(
     "keeps browser focus and consumes failures when clipboard access is %s",

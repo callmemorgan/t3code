@@ -1,16 +1,43 @@
 // Bound retained OSC text independently of terminal scrollback.
 const MAX_OSC_LENGTH = 1024 * 1024;
-const decoder = new TextDecoder("utf-8", { fatal: true });
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 // oxlint-disable-next-line no-control-regex -- C0 bytes are handled by the outer VT parser.
 const oscControl = /[\x00-\x1f]/g;
 
+// OSC writers share one system clipboard. Retain only the newest pending copy
+// while a browser write is in flight, so slow permission checks cannot build a backlog.
+let writingClipboard = false;
+let pendingClipboardWrite: {
+  text: string;
+  canWrite: () => boolean;
+  resolve: () => void;
+} | null = null;
+
 /** Application output cannot use the focus-stealing, user-gesture copy fallback. */
-export async function writeTerminalClipboard(text: string): Promise<void> {
-  try {
-    await navigator.clipboard?.writeText(text);
-  } catch {
-    // Browser-denied application copies must not write errors into the TUI.
+export function writeTerminalClipboard(
+  text: string,
+  canWrite: () => boolean = () => true,
+): Promise<void> {
+  return new Promise((resolve) => {
+    pendingClipboardWrite?.resolve();
+    pendingClipboardWrite = { text, canWrite, resolve };
+    if (!writingClipboard) void drainClipboardWrites();
+  });
+}
+
+async function drainClipboardWrites(): Promise<void> {
+  writingClipboard = true;
+  while (pendingClipboardWrite) {
+    const request = pendingClipboardWrite;
+    pendingClipboardWrite = null;
+    try {
+      if (request.canWrite()) await navigator.clipboard?.writeText(request.text);
+    } catch {
+      // Browser-denied application copies must not write errors into the TUI.
+    }
+    request.resolve();
   }
+  writingClipboard = false;
 }
 
 function decodeClipboardPayload(osc: string): string | null {

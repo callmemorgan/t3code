@@ -500,7 +500,7 @@ export function TerminalViewport({
         onData: (data) => handleData(data),
         onResize: (cols, rows) => void resizeTerminal(cols, rows),
         onSelectionChange: () => handleSelectionChange(),
-        onClipboardWrite: (text) => void writeTerminalClipboard(text),
+        onClipboardWrite: (text, canWrite) => void writeTerminalClipboard(text, canWrite),
         beforeKey: (event) => handleBeforeKey(event),
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
         // The surface listens from construction, so a right-click can land

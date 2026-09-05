@@ -536,7 +536,7 @@ export interface GhosttyTerminalSurfaceOptions {
   readonly onData: (data: string) => void;
   readonly onResize: (cols: number, rows: number) => void;
   readonly onSelectionChange: () => void;
-  readonly onClipboardWrite?: (text: string) => void;
+  readonly onClipboardWrite?: (text: string, canWrite: () => boolean) => void;
   readonly beforeKey: (event: KeyboardEvent) => boolean;
   readonly onLinkActivate: (text: string, event: MouseEvent) => void;
   /**
@@ -609,8 +609,18 @@ export class GhosttyTerminalSurface {
   private selectionClickSequence: TerminalSelectionClickSequence | null = null;
   private composing = false;
   private focused = false;
+  private clipboardCopyGeneration = 0;
   private readonly clipboardParser = new TerminalClipboardParser((text) => {
-    this.options.onClipboardWrite?.(text);
+    const generation = this.clipboardCopyGeneration;
+    this.options.onClipboardWrite?.(
+      text,
+      () =>
+        generation === this.clipboardCopyGeneration &&
+        !this.disposed &&
+        this.visible &&
+        this.focused &&
+        document.hasFocus(),
+    );
   });
   private resizeNotified = false;
   private canvasConfigured = false;
@@ -748,7 +758,7 @@ export class GhosttyTerminalSurface {
     if (!visible) {
       this.cancelRender();
       this.endSelectionDrag();
-      this.clipboardParser.invalidatePendingCopy();
+      this.invalidateClipboardCopies();
       return;
     }
     this.fit();
@@ -771,6 +781,7 @@ export class GhosttyTerminalSurface {
     this.clearSelection();
     this.lastMouseMotionData = "";
     this.core.resetAndWrite(data);
+    this.invalidateClipboardCopies();
     this.clipboardParser.reset();
     this.clipboardParser.write(data, false);
     this.synchronizeMouseTrackingState();
@@ -1012,6 +1023,7 @@ export class GhosttyTerminalSurface {
     if (this.disposed) return;
     this.disposed = true;
     this.endSelectionDrag();
+    this.invalidateClipboardCopies();
     this.clipboardParser.reset();
     this.resizeObserver.disconnect();
     document.fonts.removeEventListener("loadingdone", this.onFontsLoaded);
@@ -1170,7 +1182,7 @@ export class GhosttyTerminalSurface {
   private readonly onBlur = () => {
     this.focused = false;
     this.endSelectionDrag();
-    this.clipboardParser.invalidatePendingCopy();
+    this.invalidateClipboardCopies();
     this.linkModifierActive = false;
     this.refreshHoveredLink();
     // Suppressions survive blur deliberately: a shortcut that moves focus (for
@@ -1182,9 +1194,14 @@ export class GhosttyTerminalSurface {
     this.requestRender();
   };
 
+  private invalidateClipboardCopies(): void {
+    this.clipboardCopyGeneration += 1;
+    this.clipboardParser.invalidatePendingCopy();
+  }
+
   private readonly onWindowBlur = () => {
     this.endSelectionDrag();
-    this.clipboardParser.invalidatePendingCopy();
+    this.invalidateClipboardCopies();
   };
 
   private readonly onDevicePixelRatioChange = () => {
