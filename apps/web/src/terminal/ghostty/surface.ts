@@ -16,7 +16,7 @@ import {
 } from "./renderer";
 import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
 import { isMonospaceFamily } from "../../appearanceFonts";
-import { TerminalClipboardParser } from "./clipboard";
+import { TerminalClipboardParser } from "@t3tools/client-runtime/terminal-clipboard";
 
 export const DEFAULT_TERMINAL_FONT_SIZE = 12;
 const MIN_TERMINAL_FONT_SIZE = 6;

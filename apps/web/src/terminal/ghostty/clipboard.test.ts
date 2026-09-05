@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { TerminalClipboardParser, writeTerminalClipboard } from "./clipboard";
+import { TerminalClipboardParser } from "@t3tools/client-runtime/terminal-clipboard";
+import { writeTerminalClipboard } from "./clipboard";
 
 function osc(text: string, target = "c", terminator = "\x07") {
   return `\x1b]52;${target};${Buffer.from(text).toString("base64")}${terminator}`;
