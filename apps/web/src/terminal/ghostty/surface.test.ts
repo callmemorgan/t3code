@@ -187,6 +187,17 @@ describe("GhosttyTerminalSurface visibility", () => {
         canvas.releasePointerCapture(1);
         canvas.dispatchEvent(Object.assign(new Event("lostpointercapture"), { pointerId: 1 }));
       },
+      wheel(deltaY = 1, deltaMode = 1) {
+        canvas.dispatchEvent(
+          Object.assign(new Event("wheel", { cancelable: true }), {
+            deltaY,
+            deltaMode,
+            clientX: 5,
+            clientY: 5,
+            shiftKey: false,
+          }),
+        );
+      },
       async create(options: Partial<GhosttyTerminalSurfaceOptions> = {}) {
         const surface = await GhosttyTerminalSurface.create(mount as unknown as HTMLElement, {
           theme: {
@@ -616,6 +627,45 @@ describe("GhosttyTerminalSurface visibility", () => {
         await Promise.all(copy.mock.results.map((result) => result.value));
         expect(writeText.mock.calls).toEqual([["first"], ["new"]]);
       }
+    },
+  );
+
+  it.each([
+    ["mouse reports", "\x1b[?1049h\x1b[?1000h\x1b[?1006h", "\x1b[<65;1;1M"],
+    ["arrow keys", "\x1b[?1049h", "\x1b[B"],
+  ])("retires completed selection before forwarding wheel %s", async (_mode, setup, input) => {
+    const harness = createHarness();
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write(setup + "hello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1, true);
+    harness.pointer("pointerup", 37, 0, true);
+    expect(surface.getSelection()).toBe("hello");
+    const selectedDuringInput: string[] = [];
+    harness.onData.mockImplementation(() => {
+      selectedDuringInput.push(surface.getSelection());
+    });
+    harness.wheel(2);
+    expect(harness.onData.mock.calls.flat().join("")).toBe(input!.repeat(2));
+    expect(selectedDuringInput.every((text) => text === "")).toBe(true);
+    key(surface, "c", "KeyC", { ctrlKey: true });
+    expect(harness.onData).toHaveBeenLastCalledWith("\x03");
+  });
+
+  it.each(["active drag", "local scrollback", "fractional wheel"])(
+    "preserves selection during %s",
+    async (mode) => {
+      const harness = createHarness();
+      const surface = await harness.create();
+      surface.write((mode === "local scrollback" ? "" : "\x1b[?1049h") + "hello world");
+      harness.flushFrame();
+      harness.pointer("pointerdown", 5, 1, true);
+      harness.pointer("pointermove", 37, 1, true);
+      if (mode !== "active drag") harness.pointer("pointerup", 37, 0, true);
+      harness.wheel(mode === "fractional wheel" ? 0.1 : 1, mode === "fractional wheel" ? 0 : 1);
+      expect(surface.getSelection()).toBe("hello");
+      if (mode !== "active drag") expect(harness.onData).not.toHaveBeenCalled();
     },
   );
 

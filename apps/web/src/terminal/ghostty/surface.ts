@@ -1577,6 +1577,7 @@ export class GhosttyTerminalSurface {
     if (delta.rows === 0) return;
     const magnitude = Math.abs(delta.rows);
     if (shouldReportTerminalMouse(this.core.isMouseTracking(), event)) {
+      if (!this.selectionDrag && this.selectionAnchorScreen) this.clearSelection();
       const button = delta.rows < 0 ? 4 : 5;
       for (let index = 0; index < magnitude; index += 1) {
         this.sendMouse("press", button, event);
@@ -1586,7 +1587,7 @@ export class GhosttyTerminalSurface {
     if (this.core.isAlternateScreen()) {
       // The alternate screen has no scrollback: translate wheel motion into
       // arrow keys so full-screen apps like vim and less scroll, matching xterm.
-      this.options.onData(terminalWheelArrowData(delta.rows, this.core.isApplicationCursorKeys()));
+      this.sendUserInput(terminalWheelArrowData(delta.rows, this.core.isApplicationCursorKeys()));
       return;
     }
     this.scrollViewport(delta.rows);
