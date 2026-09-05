@@ -1,9 +1,5 @@
 import { TerminalClipboardParser } from "@t3tools/client-runtime/terminal-clipboard";
-import {
-  INITIAL_TERMINAL_OUTPUT_CURSOR,
-  readTerminalOutputUpdate,
-  type TerminalOutputState,
-} from "@t3tools/client-runtime/state/terminal";
+import type { TerminalAttachStreamEvent } from "@t3tools/contracts";
 
 /** Observe the subscription's live chunks, never a native renderer's history replay. */
 export function createTerminalClipboardSession(
@@ -11,7 +7,6 @@ export function createTerminalClipboardSession(
 ) {
   let active = false;
   let generation = 0;
-  let cursor = INITIAL_TERMINAL_OUTPUT_CURSOR;
   const invalidate = () => {
     generation += 1;
     parser.invalidatePendingCopy();
@@ -25,15 +20,25 @@ export function createTerminalClipboardSession(
       active = next;
       if (!active) invalidate();
     },
-    update(output: TerminalOutputState) {
-      const update = readTerminalOutputUpdate(output, cursor);
-      cursor = update.cursor;
-      if (update.type === "none") return;
-      if (update.type === "reset") {
-        invalidate();
-        parser.reset();
+    update(event: TerminalAttachStreamEvent) {
+      switch (event.type) {
+        case "output":
+          parser.write(event.data, active);
+          break;
+        case "snapshot":
+        case "restarted":
+          invalidate();
+          parser.reset();
+          parser.write(event.snapshot.history, false);
+          break;
+        case "cleared":
+        case "closed":
+        case "exited":
+        case "error":
+          invalidate();
+          parser.reset();
+          break;
       }
-      parser.write(update.data, active && update.type === "append");
     },
   };
 }

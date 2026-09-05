@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { createTerminalClipboardWriter } from "@t3tools/client-runtime/terminal-clipboard";
-import {
-  applyTerminalAttachStreamEvent,
-  EMPTY_TERMINAL_BUFFER_STATE,
-} from "@t3tools/client-runtime/state/terminal";
 import { ThreadId } from "@t3tools/contracts";
 import { createTerminalClipboardSession } from "./terminalClipboard";
 
@@ -17,27 +13,33 @@ function harness(writeText = vi.fn(async (_text: string) => {})) {
     pending.push(result);
     return result;
   });
-  let state = EMPTY_TERMINAL_BUFFER_STATE;
+  const target = { threadId: ThreadId.make("thread"), terminalId: "terminal" };
   return {
     session,
     writeText,
     flush: () => Promise.all(pending),
-    update: () => session.update(state.output),
-    append(data: string) {
-      state = applyTerminalAttachStreamEvent(state, {
-        type: "output",
-        threadId: ThreadId.make("thread"),
-        terminalId: "terminal",
-        data,
+    history(history: string) {
+      session.update({
+        type: "snapshot",
+        snapshot: {
+          ...target,
+          cwd: "/tmp",
+          worktreePath: null,
+          status: "running",
+          pid: 1,
+          history,
+          exitCode: null,
+          exitSignal: null,
+          label: "Terminal 1",
+          updatedAt: "2026-09-05T00:00:00Z",
+        },
       });
-      session.update(state.output);
+    },
+    append(data: string) {
+      session.update({ type: "output", ...target, data });
     },
     reset() {
-      state = {
-        ...state,
-        output: { ...state.output, resetVersion: state.output.resetVersion + 1 },
-      };
-      session.update(state.output);
+      session.update({ type: "cleared", ...target });
     },
   };
 }
@@ -46,12 +48,11 @@ describe("mobile terminal clipboard session", () => {
   it("copies live Unicode output once while ignoring initial history and replay", async () => {
     const h = harness();
     h.session.setActive(true);
-    h.append(osc("history"));
+    h.history(osc("history"));
     const text = "\uFEFFClaude: café 界🙂";
     const data = osc(text);
     h.append(data.slice(0, -1));
     h.append(data.slice(-1));
-    h.update();
     await h.flush();
     expect(h.writeText.mock.calls).toEqual([[text]]);
     h.reset();
@@ -60,9 +61,25 @@ describe("mobile terminal clipboard session", () => {
     expect(h.writeText.mock.calls).toEqual([[text], ["new"]]);
   });
 
+  it.each(["single", "chunks"])(
+    "copies a payload larger than retained output in %s writes",
+    async (mode) => {
+      const h = harness();
+      h.session.setActive(true);
+      const text = "x".repeat(600 * 1024);
+      const data = osc(text);
+      if (mode === "single") h.append(data);
+      else
+        for (let index = 0; index < data.length; index += 16 * 1024)
+          h.append(data.slice(index, index + 16 * 1024));
+      h.append("later output".repeat(100_000));
+      await h.flush();
+      expect(h.writeText.mock.calls).toEqual([[text]]);
+    },
+  );
+
   it("does not finish a split copy across leaving and returning to the terminal", async () => {
     const h = harness();
-    h.update();
     h.session.setActive(true);
     h.append(osc("old").slice(0, -1));
     h.session.setActive(false);
@@ -74,7 +91,6 @@ describe("mobile terminal clipboard session", () => {
 
   it("ignores background output without losing stream framing", async () => {
     const h = harness();
-    h.update();
     h.append(osc("background").slice(0, -1));
     h.session.setActive(true);
     h.append("\x07" + osc("live"));
@@ -88,7 +104,6 @@ describe("mobile terminal clipboard session", () => {
       finish = resolve;
     });
     const h = harness(vi.fn(() => first));
-    h.update();
     h.session.setActive(true);
     h.append(osc("first") + osc("queued"));
     if (action === "reset") h.reset();

@@ -1,4 +1,9 @@
-import { type TerminalSummary, WS_METHODS } from "@t3tools/contracts";
+import {
+  type TerminalAttachStreamEvent,
+  type TerminalSummary,
+  WS_METHODS,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -7,8 +12,10 @@ import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcSubscriptionAtomFamily,
   createEnvironmentSubscriptionAtomFamily,
+  environmentRpcKey,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import {
   applyTerminalAttachStreamEvent,
@@ -36,16 +43,43 @@ export function createTerminalEnvironmentAtoms<R, E>(
     readonly input: { readonly threadId: string; readonly terminalId?: string | undefined };
   }) => JSON.stringify([environmentId, input.threadId, input.terminalId ?? null]);
   const lifecycleConcurrency = { mode: "serial" as const, key: terminalThreadKey };
-  return {
-    attach: createEnvironmentSubscriptionAtomFamily(runtime, {
-      label: "environment-data:terminal:attach",
-      subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>) =>
-        Stream.suspend(() =>
-          subscribe(WS_METHODS.terminalAttach, input).pipe(
+  const attachObservers = new Map<string, Set<(event: TerminalAttachStreamEvent) => void>>();
+  const attach = createEnvironmentSubscriptionAtomFamily(runtime, {
+    label: "environment-data:terminal:attach",
+    subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const supervisor = yield* EnvironmentSupervisor;
+          const key = environmentRpcKey({ environmentId: supervisor.target.environmentId, input });
+          return subscribe(WS_METHODS.terminalAttach, input).pipe(
+            Stream.map((event) => {
+              const observers = attachObservers.get(key);
+              if (observers) for (const observe of observers) observe(event);
+              return event;
+            }),
             Stream.scan(nextTerminalAttachSeedState(), applyTerminalAttachStreamEvent),
-          ),
-        ),
-    }),
+          );
+        }),
+      ),
+  });
+  return {
+    attach,
+    /** Observe each live event before retention and React batching, without a second RPC stream. */
+    observeAttach(
+      target: Parameters<typeof attach>[0],
+      observe: (event: TerminalAttachStreamEvent) => void,
+    ) {
+      const key = environmentRpcKey(target);
+      const observers =
+        attachObservers.get(key) ?? new Set<(event: TerminalAttachStreamEvent) => void>();
+      attachObservers.set(key, observers);
+      observers.add(observe);
+      return () => {
+        observers.delete(observe);
+        if (observers.size === 0 && attachObservers.get(key) === observers)
+          attachObservers.delete(key);
+      };
+    },
     events: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:terminal:events",
       tag: WS_METHODS.subscribeTerminalEvents,

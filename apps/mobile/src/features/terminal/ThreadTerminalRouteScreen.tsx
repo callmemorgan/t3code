@@ -336,7 +336,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
   const terminalKey = selectedThread
     ? `${selectedThread.environmentId}:${selectedThread.id}:${terminalId}`
     : terminalId;
-  useTerminalClipboard(terminalKey, terminal.output);
+  useTerminalClipboard(selectedThread?.environmentId ?? null, terminalAttachInput);
   const bufferReplayKey = useMemo(
     () => getTerminalBufferReplayKey({ terminalKey, fontSize }),
     [fontSize, terminalKey],
