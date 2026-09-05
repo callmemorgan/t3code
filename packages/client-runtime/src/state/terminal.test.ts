@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  ProviderInstanceId,
   ThreadId,
   WS_METHODS,
   type TerminalAttachStreamEvent,
@@ -109,6 +110,7 @@ it.effect("observes live attach output before retention without another RPC subs
           threadId: ThreadId.make("thread"),
           terminalId: "term",
           cwd: "/tmp",
+          providerInstanceId: ProviderInstanceId.make("provider-1"),
           cols: 80,
           rows: 24,
         },
@@ -124,11 +126,19 @@ it.effect("observes live attach output before retention without another RPC subs
         { ...target, input: { ...target.input, cols: 90 } },
         (event) => unrelated.push(event),
       );
+      const stopOtherProvider = atoms.observeAttach(
+        {
+          ...target,
+          input: { ...target.input, providerInstanceId: ProviderInstanceId.make("provider-2") },
+        },
+        (event) => unrelated.push(event),
+      );
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           stop();
           stopOtherEnvironment();
           stopOtherAttach();
+          stopOtherProvider();
         }),
       );
       const atom = atoms.attach(target);

@@ -88,7 +88,6 @@ import {
   copyTerminalClipboardFromGesture,
   writeTerminalClipboard,
 } from "../terminal/ghostty/clipboard";
-import { toastManager } from "./ui/toast";
 import {
   resolveTerminalFontPreference,
   resolveTerminalFontSizePreference,
@@ -592,6 +591,7 @@ export function TerminalViewport({
               cwd,
               ...(worktreePath !== undefined ? { worktreePath } : {}),
               ...(runtimeEnv ? { env: runtimeEnv } : {}),
+              ...(providerInstanceId ? { providerInstanceId } : {}),
             },
           },
           (event) => {
@@ -973,7 +973,7 @@ export function TerminalViewport({
       teardown?.();
       if (hadFocus && mount.isConnected) mount.focus({ preventScroll: true });
     };
-  }, [cwd, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath]);
+  }, [cwd, environmentId, providerInstanceId, runtimeEnvKey, terminalId, threadId, worktreePath]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
