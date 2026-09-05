@@ -7,7 +7,7 @@ function osc(text: string, target = "c", terminator = "\x07") {
 }
 
 describe("terminal OSC 52 clipboard writes", () => {
-  it.each(["\uFEFFtext", "\uFEFF"])("preserves leading U+FEFF in %j", (text) => {
+  it.each(["", "\uFEFFtext", "\uFEFF"])("preserves exact clipboard text %j", (text) => {
     const copy = vi.fn();
     new TerminalClipboardParser(copy).write(osc(text), true);
     expect(copy.mock.calls).toEqual([[text]]);
@@ -37,7 +37,6 @@ describe("terminal OSC 52 clipboard writes", () => {
 
   it.each([
     "\x1b]52;c;?\x07",
-    "\x1b]52;c;\x07",
     "\x1b]52;c;bad!\x07",
     "\x1b]52;c;/w==\x07",
     osc("primary", "p"),

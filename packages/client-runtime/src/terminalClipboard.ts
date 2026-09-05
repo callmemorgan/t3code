@@ -54,9 +54,10 @@ function decodeClipboardPayload(osc: string): string | null {
   // client's clipboard to a PTY; application selection buffers stay local.
   if (target !== "" && (!/^[cps0-7]+$/.test(target) || !target.includes("c"))) return null;
   const encoded = osc.slice(separator + 1);
-  if (encoded === "" || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return null;
+  if (encoded === "") return "";
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return null;
   try {
-    return decoder.decode(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))) || null;
+    return decoder.decode(Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0)));
   } catch {
     return null;
   }
