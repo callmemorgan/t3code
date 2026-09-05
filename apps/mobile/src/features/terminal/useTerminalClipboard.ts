@@ -2,7 +2,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { createTerminalClipboardWriter } from "@t3tools/client-runtime/terminal-clipboard";
 import type { EnvironmentId, TerminalAttachInput } from "@t3tools/contracts";
 import * as Clipboard from "expo-clipboard";
-import { useCallback } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import { AppState } from "react-native";
 import { terminalEnvironment } from "../../state/terminal";
 import { createTerminalClipboardSession } from "./terminalClipboard";
@@ -14,11 +14,20 @@ export function useTerminalClipboard(
   environmentId: EnvironmentId | null,
   input: TerminalAttachInput | null,
 ) {
+  const target = environmentId !== null && input !== null ? { environmentId, input } : null;
+  // Atom identity follows the attach values; recreating an input object must not reset a copy.
+  const attachment = target === null ? null : terminalEnvironment.attach(target);
+  const latestTarget = useRef(target);
+  useLayoutEffect(() => {
+    latestTarget.current =
+      environmentId !== null && input !== null ? { environmentId, input } : null;
+  }, [environmentId, input]);
+
   useFocusEffect(
     useCallback(() => {
-      if (environmentId === null || input === null) return;
+      if (attachment === null || latestTarget.current === null) return;
       const session = createTerminalClipboardSession(writeClipboard);
-      const stop = terminalEnvironment.observeAttach({ environmentId, input }, session.update);
+      const stop = terminalEnvironment.observeAttach(latestTarget.current, session.update);
       const activate = () => session.setActive(AppState.currentState === "active");
       activate();
       const change = AppState.addEventListener("change", activate);
@@ -31,6 +40,6 @@ export function useTerminalClipboard(
         blur.remove();
         focus.remove();
       };
-    }, [environmentId, input]),
+    }, [attachment]),
   );
 }
