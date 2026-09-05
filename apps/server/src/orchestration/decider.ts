@@ -933,6 +933,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       if (responseAnnotations !== undefined && responseAnnotations.length > 0) {
+        if (
+          targetThread.session?.status === "starting" ||
+          targetThread.session?.status === "running" ||
+          targetThread.latestTurn?.state === "running" ||
+          hasQueuedTurnStartForThread(targetThread, command.createdAt)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Wait for the current turn to finish before sending response annotations.",
+          });
+        }
         // Direct decider callers can still validate against their complete
         // read model. The engine passes persisted ids explicitly for
         // annotated starts because its command model intentionally retains no

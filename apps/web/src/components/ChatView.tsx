@@ -6147,6 +6147,11 @@ function ChatViewContent(props: ChatViewProps) {
     const responseAnnotationSendState = resolveResponseAnnotationSendState({
       capability: responseAnnotationsCapability,
       isServerThread,
+      isTurnInProgress:
+        isWorking ||
+        activeThread.session?.status === "starting" ||
+        activeThread.session?.status === "running" ||
+        activeThread.latestTurn?.state === "running",
       annotations: sendContextResponseAnnotations,
     });
     if (responseAnnotationSendState.blockReason !== null) {
@@ -6154,13 +6159,17 @@ function ChatViewContent(props: ChatViewProps) {
         stackedThreadToast({
           type: "warning",
           title:
-            responseAnnotationSendState.blockReason === "unsupported"
-              ? "Response annotations are not supported by this server"
-              : "Start the thread before adding response annotations",
+            responseAnnotationSendState.blockReason === "turn-in-progress"
+              ? "Wait for the current turn to finish"
+              : responseAnnotationSendState.blockReason === "unsupported"
+                ? "Response annotations are not supported by this server"
+                : "Start the thread before adding response annotations",
           description:
-            responseAnnotationSendState.blockReason === "unsupported"
-              ? "Update the server or remove the annotations before sending."
-              : "Response annotations can only refer to responses in the current thread.",
+            responseAnnotationSendState.blockReason === "turn-in-progress"
+              ? "Your annotations are saved in the draft. Send them after this turn finishes."
+              : responseAnnotationSendState.blockReason === "unsupported"
+                ? "Update the server or remove the annotations before sending."
+                : "Response annotations can only refer to responses in the current thread.",
         }),
       );
       return;
@@ -6406,16 +6415,6 @@ function ChatViewContent(props: ChatViewProps) {
     const composerDraftContentBeforeSend = useComposerDraftStore
       .getState()
       .captureComposerDraftContent(composerDraftTarget);
-    const composerDraftContentSnapshot = {
-      ...composerDraftContentBeforeSend,
-      prompt: promptForSend,
-      images: composerImagesSnapshot,
-      terminalContexts: composerTerminalContextsSnapshot,
-      elementContexts: composerElementContextsSnapshot,
-      previewAnnotations: composerPreviewAnnotationsSnapshot,
-      responseAnnotations: composerResponseAnnotationsSnapshot,
-      reviewComments: composerReviewCommentsSnapshot,
-    };
     const messageTextWithContexts = appendElementContextsToPrompt(
       appendTerminalContextsToPrompt(promptForSend, composerTerminalContextsSnapshot),
       composerElementContextsSnapshot,
@@ -6626,12 +6625,30 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       );
     }
-    // The dispatch owns the captured content now. Remove exactly that from
-    // the live draft: the composer stayed editable during the attachment
-    // upload, so text typed or context added since the capture survives,
-    // while the sent prompt, attachments, and annotations can never ride
-    // along on the next send. The post-consume snapshot only guards the
-    // failure path so restoring a failed send cannot clobber a newer draft.
+    // Preserve the live draft verbatim for rollback. It may contain edits made
+    // during upload; the provider only receives the earlier send snapshot.
+    const composerDraftContentSnapshot = useComposerDraftStore
+      .getState()
+      .captureComposerDraftContent(composerDraftTarget);
+    // A direct preview submission can include context not yet in the store.
+    for (const image of composerImagesSnapshot) {
+      if (
+        !composerDraftContentBeforeSend.images.some((entry) => entry.id === image.id) &&
+        !composerDraftContentSnapshot.images.some((entry) => entry.id === image.id)
+      ) {
+        composerDraftContentSnapshot.images.push(image);
+      }
+    }
+    for (const annotation of composerPreviewAnnotationsSnapshot) {
+      if (
+        !composerDraftContentBeforeSend.previewAnnotations.some(
+          (entry) => entry.id === annotation.id,
+        ) &&
+        !composerDraftContentSnapshot.previewAnnotations.some((entry) => entry.id === annotation.id)
+      ) {
+        composerDraftContentSnapshot.previewAnnotations.push(annotation);
+      }
+    }
     consumeComposerDraftContent(composerDraftTarget, composerDraftContentBeforeSend);
     const clearedComposerDraftContentSnapshot = useComposerDraftStore
       .getState()
@@ -6841,7 +6858,11 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     if (failure !== null) {
-      const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
+      const retryComposerImages = composerDraftContentSnapshot.images.map((image) =>
+        composerImagesSnapshot.some((sent) => sent.previewUrl === image.previewUrl)
+          ? cloneComposerImageForRetry(image)
+          : image,
+      );
       const composerPreviewUrls = new Set(
         useComposerDraftStore
           .getState()
@@ -6868,9 +6889,7 @@ function ChatViewContent(props: ChatViewProps) {
           clearedComposerDraftContentSnapshot,
         );
       if (restoredDraft) {
-        // The restore merged the sent content with whatever the user added
-        // during the send, so read the result back instead of assuming the
-        // snapshot.
+        // Read the restored draft, including edits made during upload.
         const restoredContent = useComposerDraftStore
           .getState()
           .captureComposerDraftContent(composerDraftTarget);
@@ -6885,6 +6904,12 @@ function ChatViewContent(props: ChatViewProps) {
           prompt: restoredPrompt,
           detectTrigger: true,
         });
+      } else {
+        for (const [index, image] of retryComposerImages.entries()) {
+          if (image.previewUrl !== composerDraftContentSnapshot.images[index]?.previewUrl) {
+            revokeBlobPreviewUrl(image.previewUrl);
+          }
+        }
       }
       if (!isAtomCommandInterrupted(failure)) {
         const error = squashAtomCommandFailure(failure);

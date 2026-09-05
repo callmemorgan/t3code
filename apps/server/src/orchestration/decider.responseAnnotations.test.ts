@@ -15,6 +15,7 @@ import * as Effect from "effect/Effect";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
@@ -94,6 +95,110 @@ function makeTurnStartCommand(input: {
 }
 
 it.layer(NodeServices.layer)("response annotation decider", (it) => {
+  it.effect("rejects annotated steering while preserving ordinary steering", () =>
+    Effect.gen(function* () {
+      for (const status of ["starting", "running"] as const) {
+        const base = makeReadModel([sourceMessage]);
+        const readModel: OrchestrationReadModel = {
+          ...base,
+          threads: [
+            {
+              ...base.threads[0]!,
+              session: {
+                threadId: ThreadId.make("thread-1"),
+                status,
+                providerName: "cursor",
+                runtimeMode: "full-access",
+                activeTurnId: TurnId.make("active-turn"),
+                lastError: null,
+                updatedAt: NOW,
+              },
+            },
+          ],
+        };
+        const command = makeTurnStartCommand({
+          commandId: `annotated-${status}`,
+          messageId: `user-${status}`,
+          text: "follow up",
+          responseAnnotations: [annotation],
+        });
+        const error = yield* decideOrchestrationCommand({ command, readModel }).pipe(Effect.flip);
+        expect(error).toMatchObject({
+          _tag: "OrchestrationCommandInvariantError",
+          detail: "Wait for the current turn to finish before sending response annotations.",
+        });
+        const ordinary = makeTurnStartCommand({
+          commandId: `ordinary-${status}`,
+          messageId: `plain-${status}`,
+          text: "ordinary steer",
+        });
+        expect(
+          Array.isArray(yield* decideOrchestrationCommand({ command: ordinary, readModel })),
+        ).toBe(true);
+      }
+    }),
+  );
+
+  it.effect("rejects a second annotated start before the provider acknowledges the first", () =>
+    Effect.gen(function* () {
+      let readModel = makeReadModel([sourceMessage]);
+      const first = makeTurnStartCommand({
+        commandId: "first-start",
+        messageId: "first-user",
+        text: "first",
+        responseAnnotations: [annotation],
+      });
+      const result = yield* decideOrchestrationCommand({ command: first, readModel });
+      const events = Array.isArray(result) ? result : [result];
+      for (const [index, event] of events.entries()) {
+        readModel = yield* projectEvent(readModel, { ...event, sequence: index + 1 });
+      }
+      const second = makeTurnStartCommand({
+        commandId: "second-start",
+        messageId: "second-user",
+        text: "second",
+        responseAnnotations: [annotation],
+      });
+      const error = yield* decideOrchestrationCommand({ command: second, readModel }).pipe(
+        Effect.flip,
+      );
+      expect(error).toMatchObject({
+        _tag: "OrchestrationCommandInvariantError",
+        detail: "Wait for the current turn to finish before sending response annotations.",
+      });
+    }),
+  );
+
+  it.effect("accepts annotations once the previous turn has completed", () =>
+    Effect.gen(function* () {
+      const base = makeReadModel([sourceMessage]);
+      const readModel: OrchestrationReadModel = {
+        ...base,
+        threads: [
+          {
+            ...base.threads[0]!,
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "ready",
+              providerName: "grok",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: NOW,
+            },
+          },
+        ],
+      };
+      const command = makeTurnStartCommand({
+        commandId: "fresh-start",
+        messageId: "fresh-user",
+        text: "new turn",
+        responseAnnotations: [annotation],
+      });
+      expect(Array.isArray(yield* decideOrchestrationCommand({ command, readModel }))).toBe(true);
+    }),
+  );
+
   it.effect("copies valid annotations to the user message event", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({

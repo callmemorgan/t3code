@@ -218,6 +218,12 @@ preserves their order. You can send annotations with a normal prompt or send a m
 annotations without typed text. Sent annotations appear in the user message summary and cannot be
 edited. Their source markers disappear after sending.
 
+You can draft annotations while the agent is working. Wait until its current turn finishes before
+sending them; annotations cannot be sent as a mid-turn follow-up. Each new turn starts numbering at 1.
+
+If you edit your draft while attachments upload, the message sends the version captured when you
+pressed Send. New text and changed annotations stay in the composer for your next message.
+
 When the agent refers to a selection, T3 Code displays a blue **Annotation N** link in its response.
 Hover or focus the link to see the selected text and comment. Activate it to open the source message,
 scroll to the selection, and highlight it.

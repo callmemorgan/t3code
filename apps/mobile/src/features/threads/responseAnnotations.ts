@@ -1,5 +1,28 @@
-import type { ResponseAnnotation } from "@t3tools/contracts";
+import type { MessageId, ResponseAnnotation, TurnId } from "@t3tools/contracts";
 import { replaceResponseAnnotationDirectives } from "@t3tools/shared/responseAnnotations";
+import type { ThreadFeedEntry } from "../../lib/threadActivity";
+
+/** Used after both a press and a page load, before requesting more history. */
+export function resolveResponseAnnotationSource(
+  sourceMessageId: MessageId,
+  feed: ReadonlyArray<ThreadFeedEntry>,
+  presentedFeed: ReadonlyArray<ThreadFeedEntry>,
+):
+  | { kind: "visible"; index: number }
+  | { kind: "folded"; turnId: TurnId }
+  | { kind: "not-loaded" } {
+  const index = presentedFeed.findIndex(
+    (entry) => entry.type === "message" && entry.message.id === sourceMessageId,
+  );
+  if (index >= 0) return { kind: "visible", index };
+  const source = feed.find(
+    (entry) => entry.type === "message" && entry.message.id === sourceMessageId,
+  );
+  if (source?.type === "message" && source.message.turnId !== null) {
+    return { kind: "folded", turnId: source.message.turnId };
+  }
+  return { kind: "not-loaded" };
+}
 
 /** Internal link destination used by both mobile Markdown renderers. */
 export const MOBILE_RESPONSE_ANNOTATION_HREF_PREFIX = "t3://response-annotation/";

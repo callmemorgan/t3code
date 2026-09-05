@@ -351,6 +351,12 @@ assistant messages change so streaming deltas do not repaint the timeline. This 
 or reversed provider starts from borrowing another message's annotations without adding a new event
 type or database column.
 
+Cursor and Grok can reuse a provider turn ID when steering, so an annotated start is rejected while
+the session is starting or running, a turn is running, or a recent start is still queued. This keeps
+number-only references scoped to one annotation batch. Plain-text steering remains available. The
+client selector leaves references unresolved if historical data contains multiple annotated user
+messages bound to one turn; choosing either batch would misattribute the other batch's references.
+
 Annotations belong to their thread. A turn that creates a new thread must reject annotation
 metadata, and moving prompt text to another project does not move its annotations. The server
 advertises support with the optional `responseAnnotations: true` capability. Clients treat a missing

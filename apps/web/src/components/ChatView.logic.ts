@@ -691,11 +691,15 @@ export function deriveComposerSendState(options: {
   };
 }
 
-export type ResponseAnnotationSendBlockReason = "unsupported" | "requires-existing-thread";
+export type ResponseAnnotationSendBlockReason =
+  | "unsupported"
+  | "requires-existing-thread"
+  | "turn-in-progress";
 
 export function resolveResponseAnnotationSendState(input: {
   capability: boolean | undefined;
   isServerThread: boolean;
+  isTurnInProgress?: boolean;
   annotations: ReadonlyArray<ResponseAnnotation>;
 }): {
   canCreate: boolean;
@@ -707,11 +711,15 @@ export function resolveResponseAnnotationSendState(input: {
     canCreate: canUseAnnotations,
     annotationsForSend: canUseAnnotations ? input.annotations : [],
     blockReason:
-      input.annotations.length === 0 || canUseAnnotations
+      input.annotations.length === 0
         ? null
-        : input.isServerThread
-          ? "unsupported"
-          : "requires-existing-thread",
+        : !input.isServerThread
+          ? "requires-existing-thread"
+          : !canUseAnnotations
+            ? "unsupported"
+            : input.isTurnInProgress
+              ? "turn-in-progress"
+              : null,
   };
 }
 

@@ -1118,6 +1118,26 @@ describe("resolveResponseAnnotationSendState", () => {
     });
   });
 
+  it("keeps annotations draftable during a turn but blocks annotated steering", () => {
+    const input = { capability: true, isServerThread: true, isTurnInProgress: true };
+    expect(
+      resolveResponseAnnotationSendState({ ...input, annotations: [annotation] }),
+    ).toMatchObject({
+      canCreate: true,
+      blockReason: "turn-in-progress",
+    });
+    expect(
+      resolveResponseAnnotationSendState({ ...input, annotations: [] }).blockReason,
+    ).toBeNull();
+    expect(
+      resolveResponseAnnotationSendState({
+        ...input,
+        isTurnInProgress: false,
+        annotations: [annotation],
+      }).blockReason,
+    ).toBeNull();
+  });
+
   it("does not send metadata to a server with missing or disabled support", () => {
     for (const capability of [undefined, false]) {
       expect(

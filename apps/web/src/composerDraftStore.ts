@@ -705,9 +705,9 @@ interface ComposerDraftStoreState {
   captureComposerDraftContent: (threadRef: ComposerThreadTarget) => ComposerDraftContentSnapshot;
   /**
    * Restore a failed send only while the draft still equals `expectedCurrent`,
-   * the state consuming that send left behind. The sent content is merged back
-   * in front of what survived the consume, so an edit made during the send is
-   * kept. Returns false when the user edited the composer in the meantime.
+   * the state consuming that send left behind. Pass the draft captured just
+   * before consumption so restoration preserves edits and formatting verbatim.
+   * Returns false when the user edited the composer in the meantime.
    */
   restoreComposerDraftContentIfUnchanged: (
     threadRef: ComposerThreadTarget,
@@ -715,11 +715,8 @@ interface ComposerDraftStoreState {
     expectedCurrent?: ComposerDraftContentSnapshot,
   ) => boolean;
   /**
-   * Removes exactly the captured content from the live draft after it was
-   * dispatched. Text typed after the capture stays when the sent prompt is a
-   * prefix of the current prompt; attachments, contexts, and annotations added
-   * since the capture always stay. Anything captured never lingers, so the
-   * next send cannot repeat it.
+   * Removes unchanged submitted content. Changed items and replacement prompt
+   * text belong to the next draft; an appended prompt keeps its raw suffix.
    */
   consumeComposerDraftContent: (
     threadRef: ComposerThreadTarget,
@@ -951,42 +948,17 @@ function normalizeTerminalContextsForThread(
   return normalizedContexts;
 }
 
-function draftItemId(value: unknown): string | null {
-  return typeof value === "object" &&
-    value !== null &&
-    "id" in value &&
-    typeof value.id === "string"
-    ? value.id
-    : null;
-}
-
-/** Drops items the send consumed, matched by id when present, else by reference. */
+/** An edited item is new draft content even when its ID has not changed. */
 function withoutSentItems<T>(current: ReadonlyArray<T>, sent: ReadonlyArray<T>): T[] {
-  if (sent.length === 0) return [...current];
-  const sentIds = new Set(sent.map(draftItemId).filter((id): id is string => id !== null));
-  return current.filter((item) => {
-    const id = draftItemId(item);
-    return id !== null ? !sentIds.has(id) : !sent.includes(item);
-  });
-}
-
-/** Puts sent items back ahead of anything added since, without duplicates. */
-function withSentItemsFirst<T>(sent: ReadonlyArray<T>, current: ReadonlyArray<T>): T[] {
-  return [...sent, ...withoutSentItems(current, sent)];
-}
-
-function joinPrompts(sent: string, remaining: string): string {
-  if (remaining.length === 0) return sent;
-  if (sent.length === 0) return remaining;
-  return `${sent} ${remaining}`;
+  return current.filter(
+    (item) => !sent.some((original) => item === original || Equal.equals(item, original)),
+  );
 }
 
 function promptWithoutSentText(current: string, sent: string): string {
   if (sent.length === 0) return current;
   if (current === sent) return "";
-  // Typing continued after the capture: keep only the appended text. An edit
-  // anywhere inside the sent text cannot be separated, so it is cleared.
-  return current.startsWith(sent) ? current.slice(sent.length).trimStart() : "";
+  return current.startsWith(sent) ? current.slice(sent.length) : current;
 }
 
 function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
@@ -3992,33 +3964,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const base = current ?? createEmptyThreadDraft();
             const nextDraft: ComposerThreadDraftState = {
               ...base,
-              prompt: joinPrompts(snapshot.prompt, base.prompt),
-              images: withSentItemsFirst(snapshot.images, base.images),
-              files: withSentItemsFirst(snapshot.files, base.files),
-              nonPersistedImageIds: [
-                ...snapshot.nonPersistedImageIds,
-                ...base.nonPersistedImageIds.filter(
-                  (id) => !snapshot.nonPersistedImageIds.includes(id),
-                ),
-              ],
-              persistedAttachments: withSentItemsFirst(
-                snapshot.persistedAttachments,
-                base.persistedAttachments,
-              ),
-              terminalContexts: withSentItemsFirst(
-                snapshot.terminalContexts,
-                base.terminalContexts,
-              ),
-              elementContexts: withSentItemsFirst(snapshot.elementContexts, base.elementContexts),
-              previewAnnotations: withSentItemsFirst(
-                snapshot.previewAnnotations,
-                base.previewAnnotations,
-              ),
-              responseAnnotations: withSentItemsFirst(
-                snapshot.responseAnnotations,
-                base.responseAnnotations,
-              ),
-              reviewComments: withSentItemsFirst(snapshot.reviewComments, base.reviewComments),
+              ...captureComposerDraftContent({ ...base, ...snapshot }),
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
@@ -4033,13 +3979,24 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           set((state) => {
             const current = state.draftsByThreadKey[threadKey];
             if (!current) return state;
-            const images = withoutSentItems(current.images, sent.images);
+            // Upload completion updates metadata without changing the file.
+            const images = current.images.filter(
+              (image) =>
+                !sent.images.some(
+                  (original) => original.id === image.id && original.file === image.file,
+                ),
+            );
             const remainingImageIds = new Set(images.map((image) => image.id));
             const nextDraft: ComposerThreadDraftState = {
               ...current,
               prompt: promptWithoutSentText(current.prompt, sent.prompt),
               images,
-              files: withoutSentItems(current.files, sent.files),
+              files: current.files.filter(
+                (file) =>
+                  !sent.files.some(
+                    (original) => original.id === file.id && original.file === file.file,
+                  ),
+              ),
               nonPersistedImageIds: current.nonPersistedImageIds.filter((id) =>
                 remainingImageIds.has(id),
               ),

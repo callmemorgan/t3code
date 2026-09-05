@@ -188,6 +188,7 @@ import { ResponseAnnotationSummary } from "./ResponseAnnotationSummary";
 import {
   prepareResponseAnnotationMarkdown,
   responseAnnotationReferenceFromHref,
+  resolveResponseAnnotationSource,
 } from "./responseAnnotations";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
@@ -2623,8 +2624,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     props.loadEarlier.onLoadEarlier();
   }, [props.loadEarlier]);
 
-  // Both the initial press and the retry effect (after an older page loads or a
-  // collapsed turn expands) land here, so the reveal behaviour has one home.
+  // The pending jump resolves after loading or expanding its source turn.
   const revealResponseAnnotationSourceIndex = useCallback(
     (sourceIndex: number) => {
       setPendingResponseAnnotationSourceId(null);
@@ -2639,63 +2639,28 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [props.listRef],
   );
 
-  const scrollToResponseAnnotationSourceMessage = useCallback(
-    (sourceMessageId: MessageId) => {
-      const sourceIndex = presentedFeed.findIndex(
-        (entry) => entry.type === "message" && entry.message.id === sourceMessageId,
-      );
-      if (sourceIndex >= 0) {
-        revealResponseAnnotationSourceIndex(sourceIndex);
-        return;
-      }
-
-      const sourceEntry = props.feed.find(
-        (entry) => entry.type === "message" && entry.message.id === sourceMessageId,
-      );
-      const sourceTurnId =
-        sourceEntry?.type === "message" && sourceEntry.message.role === "assistant"
-          ? sourceEntry.message.turnId
-          : null;
-      if (
-        sourceEntry?.type === "message" &&
-        sourceTurnId !== null &&
-        !expandedTurnIds.has(sourceTurnId)
-      ) {
-        setPendingResponseAnnotationSourceId(sourceMessageId);
-        setInteractionState((current) => ({
-          ...current,
-          expandedTurnIds: new Set(current.expandedTurnIds).add(sourceTurnId),
-        }));
-        return;
-      }
-
-      if (props.loadEarlier !== null && props.loadEarlier !== undefined) {
-        setPendingResponseAnnotationSourceId(sourceMessageId);
-        requestOlderTurnsForResponseAnnotation();
-      } else {
-        abandonResponseAnnotationSourceSearch();
-      }
-    },
-    [
-      abandonResponseAnnotationSourceSearch,
-      expandedTurnIds,
-      presentedFeed,
-      props.feed,
-      props.loadEarlier,
-      requestOlderTurnsForResponseAnnotation,
-      revealResponseAnnotationSourceIndex,
-    ],
-  );
-
   useEffect(() => {
     if (pendingResponseAnnotationSourceId === null) {
       return;
     }
-    const sourceIndex = presentedFeed.findIndex(
-      (entry) => entry.type === "message" && entry.message.id === pendingResponseAnnotationSourceId,
+    const source = resolveResponseAnnotationSource(
+      pendingResponseAnnotationSourceId,
+      props.feed,
+      presentedFeed,
     );
-    if (sourceIndex >= 0) {
-      revealResponseAnnotationSourceIndex(sourceIndex);
+    if (source.kind === "visible") {
+      revealResponseAnnotationSourceIndex(source.index);
+      return;
+    }
+    if (source.kind === "folded") {
+      setInteractionState((current) =>
+        current.expandedTurnIds.has(source.turnId)
+          ? current
+          : {
+              ...current,
+              expandedTurnIds: new Set(current.expandedTurnIds).add(source.turnId),
+            },
+      );
       return;
     }
     if (props.loadEarlier === null || props.loadEarlier === undefined) {
@@ -2707,22 +2672,20 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     abandonResponseAnnotationSourceSearch,
     pendingResponseAnnotationSourceId,
     presentedFeed,
+    props.feed,
     props.loadEarlier,
     requestOlderTurnsForResponseAnnotation,
     revealResponseAnnotationSourceIndex,
   ]);
 
-  const onResponseAnnotationPress = useCallback(
-    (annotation: ResponseAnnotation, index: number) => {
-      void Haptics.selectionAsync();
-      scrollToResponseAnnotationSourceMessage(annotation.sourceMessageId);
-      const selectedText = truncateForAlert(annotation.selectedText.trim());
-      const comment = truncateForAlert(annotation.comment.trim());
-      const detail = comment.length > 0 ? `${selectedText}\n\n${comment}` : selectedText;
-      Alert.alert(`Annotation ${index}`, detail, [{ text: "OK", style: "cancel" }]);
-    },
-    [scrollToResponseAnnotationSourceMessage],
-  );
+  const onResponseAnnotationPress = useCallback((annotation: ResponseAnnotation, index: number) => {
+    void Haptics.selectionAsync();
+    setPendingResponseAnnotationSourceId(annotation.sourceMessageId);
+    const selectedText = truncateForAlert(annotation.selectedText.trim());
+    const comment = truncateForAlert(annotation.comment.trim());
+    const detail = comment.length > 0 ? `${selectedText}\n\n${comment}` : selectedText;
+    Alert.alert(`Annotation ${index}`, detail, [{ text: "OK", style: "cancel" }]);
+  }, []);
   useEffect(() => {
     onResponseAnnotationPressRef.current = onResponseAnnotationPress;
     return () => {

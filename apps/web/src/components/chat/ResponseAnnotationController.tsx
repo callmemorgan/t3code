@@ -697,19 +697,12 @@ export function ResponseAnnotationTimelineController({
     readonly number: number;
     readonly anchorRect: ResponseAnnotationFloatingRect;
   } | null>(null);
-  const [optimisticAnnotations, setOptimisticAnnotations] = useState<
-    ReadonlyArray<ResponseAnnotation>
-  >([]);
-  const [deletedAnnotationIds, setDeletedAnnotationIds] = useState<
-    ReadonlySet<ResponseAnnotationId>
-  >(new Set());
   const [historicalJump, setHistoricalJump] = useState<{
     readonly annotation: ResponseAnnotation;
     readonly number: number;
     readonly rects: ReadonlyArray<ResponseAnnotationFloatingRect>;
     readonly showMarker: boolean;
   } | null>(null);
-  const previousDraftAnnotationsRef = useRef<ReadonlyArray<ResponseAnnotation>>(draftAnnotations);
   const historicalJumpRef = useRef(historicalJump);
   // The historical highlight is a fixed-position overlay over rects captured
   // once, so it must track the viewport for as long as it is on screen.
@@ -728,53 +721,14 @@ export function ResponseAnnotationTimelineController({
     historicalJumpRef.current = historicalJump;
   }, [historicalJump]);
 
-  useEffect(() => {
-    if (optimisticAnnotations.length === 0 || draftAnnotations.length === 0) return;
-    const acknowledgedIds = new Set(draftAnnotations.map((annotation) => annotation.id));
-    setOptimisticAnnotations((existing) =>
-      existing.filter((annotation) => !acknowledgedIds.has(annotation.id)),
-    );
-  }, [draftAnnotations, optimisticAnnotations.length]);
-
-  // A successful send clears the draft before the server echoes the user
-  // message back through the timeline. Optimistic markers are only draft UI;
-  // retaining them here would leave an editable editor attached to a sent
-  // annotation until the route remounts.
-  useEffect(() => {
-    const previousDraftAnnotations = previousDraftAnnotationsRef.current;
-    previousDraftAnnotationsRef.current = draftAnnotations;
-    if (
-      optimisticAnnotations.length === 0 ||
-      draftAnnotations.length > 0 ||
-      previousDraftAnnotations.length === 0
-    ) {
-      return;
-    }
-    setOptimisticAnnotations([]);
-  }, [draftAnnotations, optimisticAnnotations.length]);
-
-  const effectiveAnnotations = useMemo(() => {
-    if (optimisticAnnotations.length === 0 && deletedAnnotationIds.size === 0) {
-      return draftAnnotations;
-    }
-    const byId = new Map(
-      draftAnnotations
-        .filter((annotation) => !deletedAnnotationIds.has(annotation.id))
-        .map((annotation) => [annotation.id, annotation]),
-    );
-    for (const annotation of optimisticAnnotations) {
-      if (!deletedAnnotationIds.has(annotation.id)) byId.set(annotation.id, annotation);
-    }
-    return Array.from(byId.values());
-  }, [deletedAnnotationIds, draftAnnotations, optimisticAnnotations]);
   const numberByAnnotationId = useMemo(
-    () => deriveResponseAnnotationNumbers(effectiveAnnotations),
-    [effectiveAnnotations],
+    () => deriveResponseAnnotationNumbers(draftAnnotations),
+    [draftAnnotations],
   );
   const sourceMarkersByMessageId = useMemo(() => {
     const byMessageId = new Map<MessageId, ResponseAnnotationSourceMarker[]>();
 
-    for (const annotation of effectiveAnnotations) {
+    for (const annotation of draftAnnotations) {
       const number = numberByAnnotationId.get(annotation.id);
       if (number === undefined) continue;
       const existing = byMessageId.get(annotation.sourceMessageId) ?? [];
@@ -783,7 +737,7 @@ export function ResponseAnnotationTimelineController({
     }
 
     return byMessageId;
-  }, [effectiveAnnotations, numberByAnnotationId]);
+  }, [draftAnnotations, numberByAnnotationId]);
 
   const readTextSelection = useCallback(() => {
     if (!supported || editor !== null) return;
@@ -965,7 +919,7 @@ export function ResponseAnnotationTimelineController({
 
   const createFromSelection = useCallback(() => {
     const current = selectionRef.current;
-    if (!current || !canCreateResponseAnnotation(effectiveAnnotations.length)) return;
+    if (!current || !canCreateResponseAnnotation(draftAnnotations.length)) return;
     const annotation: ResponseAnnotation = {
       id: newResponseAnnotationId(),
       sourceMessageId: current.sourceMessageId,
@@ -975,15 +929,14 @@ export function ResponseAnnotationTimelineController({
     };
     const accepted = onCreateResponseAnnotation?.(annotation);
     if (accepted === false) return;
-    setOptimisticAnnotations((existing) => [...existing, annotation]);
     selectionRef.current = null;
     setSelection(null);
     setEditor({
       annotation,
-      number: effectiveAnnotations.length + 1,
+      number: draftAnnotations.length + 1,
       anchorRect: current.rect,
     });
-  }, [effectiveAnnotations.length, onCreateResponseAnnotation]);
+  }, [draftAnnotations.length, onCreateResponseAnnotation]);
 
   const closeEditor = useCallback(
     (annotationId?: ResponseAnnotationId) => {
@@ -1219,18 +1172,15 @@ export function ResponseAnnotationTimelineController({
   );
 
   const editorAnnotation = editor
-    ? (effectiveAnnotations.find((annotation) => annotation.id === editor.annotation.id) ??
+    ? (draftAnnotations.find((annotation) => annotation.id === editor.annotation.id) ??
       editor.annotation)
     : null;
 
   useEffect(() => {
-    if (
-      editor &&
-      !effectiveAnnotations.some((annotation) => annotation.id === editor.annotation.id)
-    ) {
+    if (editor && !draftAnnotations.some((annotation) => annotation.id === editor.annotation.id)) {
       setEditor(null);
     }
-  }, [editor, effectiveAnnotations]);
+  }, [editor, draftAnnotations]);
 
   return (
     <responseAnnotationTimelineContext.Provider value={contextValue}>
@@ -1245,7 +1195,7 @@ export function ResponseAnnotationTimelineController({
       {supported && selection ? (
         <ResponseAnnotationSelectionAction
           rect={selection.rect}
-          disabled={!canCreateResponseAnnotation(effectiveAnnotations.length)}
+          disabled={!canCreateResponseAnnotation(draftAnnotations.length)}
           onAnnotate={createFromSelection}
         />
       ) : null}
@@ -1257,24 +1207,11 @@ export function ResponseAnnotationTimelineController({
           onCancel={() => closeEditor(editorAnnotation.id)}
           onDelete={() => {
             onDeleteResponseAnnotation?.(editorAnnotation.id);
-            setDeletedAnnotationIds((existing) => {
-              const next = new Set(existing);
-              next.add(editorAnnotation.id);
-              return next;
-            });
-            setOptimisticAnnotations((existing) =>
-              existing.filter((annotation) => annotation.id !== editorAnnotation.id),
-            );
             setEditor(null);
             restoreSourceFocus(editorAnnotation);
           }}
           onSave={(comment) => {
             onUpdateResponseAnnotation?.(editorAnnotation.id, comment);
-            setOptimisticAnnotations((existing) =>
-              existing.map((annotation) =>
-                annotation.id === editorAnnotation.id ? { ...annotation, comment } : annotation,
-              ),
-            );
             closeEditor(editorAnnotation.id);
           }}
         />

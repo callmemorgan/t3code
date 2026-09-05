@@ -39,6 +39,28 @@ function message(input: {
 }
 
 describe("response annotation turn selector", () => {
+  it("leaves legacy same-turn steering references unresolved instead of choosing the wrong batch", () => {
+    const turnId = TurnId.make("steered-turn");
+    const users = ["first", "second", "third"].map((id) =>
+      message({
+        id,
+        role: "user",
+        turnId,
+        responseAnnotations: [{ ...annotation, id: ResponseAnnotationId.make(id) }],
+      }),
+    );
+    const select = createResponseAnnotationTurnContextSelector();
+    expect(select(users.slice(0, 1)).annotationsByTurnId.get(turnId)).toEqual(
+      users[0]?.responseAnnotations,
+    );
+    for (const count of [2, 3]) {
+      const result = select(users.slice(0, count));
+      expect(result.annotationsByTurnId.has(turnId)).toBe(false);
+      expect(result.userMessageIdByTurnId.has(turnId)).toBe(false);
+      expect(result.annotationsById.size).toBe(count);
+    }
+  });
+
   it("returns the empty singleton when annotations are absent or unbound", () => {
     const select = createResponseAnnotationTurnContextSelector();
     const unbound = message({

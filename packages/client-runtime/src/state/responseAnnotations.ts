@@ -73,12 +73,17 @@ function buildResponseAnnotationTurnContext(
   const annotationsByTurnId = new Map<TurnId, ReadonlyArray<ResponseAnnotation>>();
   const userMessageIdByTurnId = new Map<TurnId, MessageId>();
   const annotationsById = new Map<ResponseAnnotation["id"], ResponseAnnotation>();
+  const ambiguousTurnIds = new Set<TurnId>();
 
   for (const source of sources) {
-    // A turn has one initiating user message. Keep the first source if a
-    // malformed/replayed stream supplies a duplicate rather than silently
-    // replacing a stable association with a later message.
-    if (!annotationsByTurnId.has(source.turnId)) {
+    // Older clients could send two annotation batches while steering one
+    // provider turn. Number-only references cannot distinguish those batches.
+    const previousMessageId = userMessageIdByTurnId.get(source.turnId);
+    if (previousMessageId !== undefined && previousMessageId !== source.message.id) {
+      ambiguousTurnIds.add(source.turnId);
+      annotationsByTurnId.delete(source.turnId);
+      userMessageIdByTurnId.delete(source.turnId);
+    } else if (!ambiguousTurnIds.has(source.turnId)) {
       annotationsByTurnId.set(source.turnId, source.annotations);
       userMessageIdByTurnId.set(source.turnId, source.message.id);
     }

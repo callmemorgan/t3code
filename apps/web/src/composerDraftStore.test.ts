@@ -2594,38 +2594,98 @@ describe("composerDraftStore response annotations", () => {
 
     store.consumeComposerDraftContent(threadRef, sent);
     const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
-    expect(draft?.prompt).toBe("and also this");
+    expect(draft?.prompt).toBe(" and also this");
     expect(draft?.responseAnnotations).toEqual([laterAnnotation]);
   });
 
-  it("clears a prompt edited inside the sent text but never re-sends captured annotations", () => {
+  it("keeps a replacement prompt but consumes unchanged annotations", () => {
     const store = useComposerDraftStore.getState();
     store.setPrompt(threadRef, "send this");
     store.addResponseAnnotation(threadRef, makeResponseAnnotation({ id: "sent-annotation" }));
     const sent = store.captureComposerDraftContent(threadRef);
 
-    store.setPrompt(threadRef, "SEND this");
+    store.setPrompt(threadRef, "An entirely different follow-up");
     store.consumeComposerDraftContent(threadRef, sent);
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("An entirely different follow-up");
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.responseAnnotations).toEqual([]);
   });
 
-  it("restores a failed send in front of edits made while it was in flight", () => {
+  it("keeps edits to an annotation with the same ID during upload", () => {
     const store = useComposerDraftStore.getState();
-    store.setPrompt(threadRef, "send this");
-    const sentAnnotation = makeResponseAnnotation({ id: "sent-annotation" });
-    store.addResponseAnnotation(threadRef, sentAnnotation);
+    const annotation = makeResponseAnnotation({ id: "edited-during-upload", comment: "old" });
+    store.addResponseAnnotation(threadRef, annotation);
     const sent = store.captureComposerDraftContent(threadRef);
-
-    store.setPrompt(threadRef, "send this and also this");
-    const laterAnnotation = makeResponseAnnotation({ id: "later-annotation", comment: "later" });
-    store.addResponseAnnotation(threadRef, laterAnnotation);
+    store.updateResponseAnnotationComment(threadRef, annotation.id, "new comment");
+    const beforeConsume = store.captureComposerDraftContent(threadRef);
     store.consumeComposerDraftContent(threadRef, sent);
     const afterConsume = store.captureComposerDraftContent(threadRef);
+    expect(afterConsume.responseAnnotations).toEqual([{ ...annotation, comment: "new comment" }]);
+    expect(sent.responseAnnotations[0]?.comment).toBe("old");
+    expect(
+      store.restoreComposerDraftContentIfUnchanged(threadRef, beforeConsume, afterConsume),
+    ).toBe(true);
+    expect(store.captureComposerDraftContent(threadRef)).toEqual(beforeConsume);
+  });
 
-    expect(store.restoreComposerDraftContentIfUnchanged(threadRef, sent, afterConsume)).toBe(true);
-    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
-    expect(draft?.prompt).toBe("send this and also this");
-    expect(draft?.responseAnnotations).toEqual([sentAnnotation, laterAnnotation]);
+  it("consumes sent files after upload bookkeeping changes while retaining later attachments", () => {
+    const store = useComposerDraftStore.getState();
+    store.addFiles(threadRef, [makeFile("sent-file")]);
+    const sent = store.captureComposerDraftContent(threadRef);
+    store.setFileUpload(threadRef, "sent-file", TEST_ENVIRONMENT_ID, "uploaded-file");
+    store.addFiles(threadRef, [{ ...makeFile("later-file"), name: "later.pdf" }]);
+    const beforeConsume = store.captureComposerDraftContent(threadRef);
+    store.consumeComposerDraftContent(threadRef, sent);
+    const afterConsume = store.captureComposerDraftContent(threadRef);
+    expect(afterConsume.files.map((file) => file.id)).toEqual(["later-file"]);
+    expect(
+      store.restoreComposerDraftContentIfUnchanged(threadRef, beforeConsume, afterConsume),
+    ).toBe(true);
+    expect(store.captureComposerDraftContent(threadRef)).toEqual(beforeConsume);
+  });
+
+  it.each([" and also this", "\n\nand also this", "\n    indented code", "SuffixWithoutASpace"])(
+    "restores failed sends with the exact suffix %j",
+    (suffix) => {
+      const store = useComposerDraftStore.getState();
+      store.setPrompt(threadRef, "send this");
+      const sentAnnotation = makeResponseAnnotation({ id: "sent-annotation" });
+      store.addResponseAnnotation(threadRef, sentAnnotation);
+      const sent = store.captureComposerDraftContent(threadRef);
+
+      store.setPrompt(threadRef, `send this${suffix}`);
+      const laterAnnotation = makeResponseAnnotation({ id: "later-annotation", comment: "later" });
+      store.addResponseAnnotation(threadRef, laterAnnotation);
+      const beforeConsume = store.captureComposerDraftContent(threadRef);
+      store.consumeComposerDraftContent(threadRef, sent);
+      const afterConsume = store.captureComposerDraftContent(threadRef);
+
+      expect(afterConsume.prompt).toBe(suffix);
+      expect(
+        store.restoreComposerDraftContentIfUnchanged(threadRef, beforeConsume, afterConsume),
+      ).toBe(true);
+      const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+      expect(draft?.prompt).toBe(`send this${suffix}`);
+      expect(draft?.responseAnnotations).toEqual([sentAnnotation, laterAnnotation]);
+    },
+  );
+
+  it("restores replacement text and respects deletions made during upload", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "original");
+    const annotation = makeResponseAnnotation({ id: "deleted-during-upload" });
+    store.addResponseAnnotation(threadRef, annotation);
+    const sent = store.captureComposerDraftContent(threadRef);
+    store.setPrompt(threadRef, "replacement");
+    store.removeResponseAnnotation(threadRef, annotation.id);
+    const beforeConsume = store.captureComposerDraftContent(threadRef);
+    store.consumeComposerDraftContent(threadRef, sent);
+    const afterConsume = store.captureComposerDraftContent(threadRef);
+    expect(
+      store.restoreComposerDraftContentIfUnchanged(threadRef, beforeConsume, afterConsume),
+    ).toBe(true);
+    expect(store.captureComposerDraftContent(threadRef)).toEqual(beforeConsume);
+    expect(beforeConsume.prompt).toBe("replacement");
+    expect(beforeConsume.responseAnnotations).toEqual([]);
   });
 
   it("keeps source-bound annotations when clearing stash-transferable content", () => {
