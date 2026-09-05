@@ -839,6 +839,26 @@ export class GhosttyTerminalCore {
     return this.convertPoint(col, row, 1, 2);
   }
 
+  /** Resolve terminal-owned selection endpoints before their borrowed refs can go stale. */
+  selectionPosition(): GhosttySelectionRange["screen"] | null {
+    this.ensureActive();
+    const layout = this.runtime.layout("GhosttySelection");
+    const selection = this.runtime.alloc(layout.size);
+    try {
+      this.runtime.setField(selection, "GhosttySelection", "size", layout.size);
+      if (
+        this.runtime.call("ghostty_terminal_get", this.terminal, 31, selection) !== GHOSTTY_SUCCESS
+      ) {
+        return null;
+      }
+      const start = this.pointFromGridRef(selection + layout.fields.start!.offset, 2);
+      const end = this.pointFromGridRef(selection + layout.fields.end!.offset, 2);
+      return start && end ? { start, end } : null;
+    } finally {
+      this.runtime.free(selection, layout.size);
+    }
+  }
+
   screenPointToViewport(col: number, row: number): { x: number; y: number } | null {
     return this.convertPoint(col, row, 2, 1);
   }

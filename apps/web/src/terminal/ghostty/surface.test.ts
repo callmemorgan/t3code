@@ -171,13 +171,20 @@ describe("GhosttyTerminalSurface visibility", () => {
       resize() {
         for (const callback of resizeCallbacks) callback();
       },
-      pointer(type: string, clientX: number, buttons: number, shiftKey = false, clientY = 5) {
+      pointer(
+        type: string,
+        clientX: number,
+        buttons: number,
+        shiftKey = false,
+        clientY = 5,
+        button = 0,
+      ) {
         canvas.dispatchEvent(
           Object.assign(new Event(type, { cancelable: true }), {
             clientX,
             clientY,
             pointerId: 1,
-            button: 0,
+            button,
             buttons,
             shiftKey,
           }),
@@ -375,6 +382,101 @@ describe("GhosttyTerminalSurface visibility", () => {
     finishCopy();
     await copied;
     expect(surface.getSelection()).toBe("world");
+  });
+
+  it("clears an unmoved selection when its pointer is cancelled", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("hello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointercancel", 5, 0, false, 5, -1);
+    expect(surface.getSelection()).toBe("");
+    expect(surface.getSelectionPosition()).toBeNull();
+  });
+
+  it("allows a native selection after an application drag loses capture", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("\x1b[?1002h\x1b[?1006hhello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.loseCapture();
+    harness.onData.mockClear();
+    harness.pointer("pointerdown", 5, 1, true);
+    harness.pointer("pointermove", 37, 1, true);
+    harness.pointer("pointerup", 37, 0, true);
+    expect(surface.getSelection()).toBe("hello");
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it("only repaints the cursor row for an application mouse press without selection", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("\x1b[?1002h\x1b[?1006hhello world\r\ncursor row");
+    harness.flushFrame();
+    harness.paint.mockClear();
+    harness.pointer("pointerdown", 5, 1);
+    harness.flushFrame();
+    expect(harness.onData).toHaveBeenCalled();
+    expect(
+      harness.paint.mock.calls
+        .filter(([operation]) => operation === "fillText")
+        .map(([, args]) => args[0]),
+    ).toEqual(["cursor row"]);
+  });
+
+  it("ends selection on left release while another mouse button remains held", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("hello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointermove", 37, 1);
+    // Chorded button changes arrive as pointermove until the final release.
+    harness.pointer("pointermove", 37, 3, false, 5, 2);
+    harness.pointer("pointermove", 37, 2, false, 5, 0);
+    harness.pointer("pointermove", 85, 2);
+    harness.pointer("pointerup", 85, 0, false, 5, 2);
+    expect(surface.getSelection()).toBe("hello");
+  });
+
+  it.each([false, true])(
+    "retires stale selection coordinates after scrollback eviction (dragging: %s)",
+    async (dragging) => {
+      const harness = createHarness();
+      const surface = await harness.create();
+      surface.write("hello world\r\n".repeat(11_000));
+      harness.flushFrame();
+      harness.pointer("pointerdown", 5, 1);
+      harness.pointer("pointermove", 37, 1);
+      if (!dragging) harness.pointer("pointerup", 37, 0);
+      expect(surface.getSelection()).toBe("hello");
+      surface.write("later output\r\n".repeat(500));
+      expect(surface.getSelectionPosition()).toBeNull();
+      expect(surface.getSelection()).toBe("");
+      harness.pointer("pointerup", 85, 0);
+      expect(surface.getSelection()).toBe("");
+      expect(surface.getSelectionEndClientRect()).toBeNull();
+    },
+  );
+
+  it.each([
+    ["Fn", "Fn"],
+    ["FnLock", "FnLock"],
+    ["Super", "MetaLeft"],
+    ["Hyper", "MetaRight"],
+  ])("preserves a selection for the %s modifier", async (value, code) => {
+    const harness = createHarness();
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write("hello world\x1b[>11u");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointerup", 37, 0);
+    key(surface, value, code);
+    key(surface, value, code, {}, "keyup");
+    expect(surface.getSelection()).toBe("hello");
   });
 
   it.each([

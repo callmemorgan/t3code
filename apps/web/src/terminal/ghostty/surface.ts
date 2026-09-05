@@ -47,6 +47,12 @@ const MODIFIER_KEYS = new Set([
   "CapsLock",
   "NumLock",
   "ScrollLock",
+  "Fn",
+  "FnLock",
+  "Hyper",
+  "Super",
+  "Symbol",
+  "SymbolLock",
 ]);
 const TERMINAL_FONT_LOAD_TEXT = "iMW0@# .";
 const TERMINAL_FONT_LOAD_VARIANTS = [
@@ -781,6 +787,18 @@ export class GhosttyTerminalSurface {
   write(data: string): void {
     if (this.disposed) return;
     this.core.write(data);
+    if (this.selectionAnchorScreen) {
+      const selection = this.core.selectionPosition();
+      // Scrollback eviction can move the core's tracked endpoints. Retire the
+      // gesture and its cached word/line anchors before they select different rows.
+      if (
+        selection?.start.x !== this.selectionAnchorScreen.x ||
+        selection?.start.y !== this.selectionAnchorScreen.y ||
+        selection?.end.x !== this.selectionEndScreen?.x ||
+        selection?.end.y !== this.selectionEndScreen?.y
+      )
+        this.clearSelection();
+    }
     this.synchronizeMouseTrackingState();
     // Restart the blink cycle from the visible phase so the cursor never sits
     // invisible through a stream of output or a burst of typing echo.
@@ -1317,7 +1335,7 @@ export class GhosttyTerminalSurface {
       if (button === null) return;
       event.preventDefault();
       event.stopPropagation();
-      this.clearSelection();
+      if (this.selectionAnchorScreen || this.selectionDrag) this.clearSelection();
       this.clearHoveredLink("default");
       this.mouseReportingPointerId = event.pointerId;
       this.mouseReportingButton = button;
@@ -1334,7 +1352,7 @@ export class GhosttyTerminalSurface {
       return;
     }
     this.clearHoveredLink();
-    this.clearSelection();
+    if (this.selectionAnchorScreen || this.selectionDrag) this.clearSelection();
     const cell = this.cellAt(event.clientX, event.clientY);
     this.selectionClickSequence = advanceTerminalSelectionClickSequence(
       this.selectionClickSequence,
@@ -1376,6 +1394,11 @@ export class GhosttyTerminalSurface {
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
+    // Releasing left while another button is held produces pointermove, not pointerup.
+    if (this.selectionDrag?.pointerId === event.pointerId && (event.buttons & 1) === 0) {
+      this.onPointerUp(event);
+      return;
+    }
     if (this.linkActivationPointerId === event.pointerId) return;
     // Hover motion is only reportable in any-event tracking (DEC 1003); normal and
     // button-event tracking never report motion without a captured pressed button.
@@ -1472,12 +1495,14 @@ export class GhosttyTerminalSurface {
   }
 
   private readonly onLostPointerCapture = (event: PointerEvent) => {
-    if (
-      this.selectionDrag?.pointerId === event.pointerId &&
-      !this.canvas.hasPointerCapture(event.pointerId)
-    ) {
-      this.endSelectionDrag();
+    if (this.canvas.hasPointerCapture(event.pointerId)) return;
+    if (this.selectionDrag?.pointerId === event.pointerId) this.endSelectionDrag();
+    if (this.mouseReportingPointerId === event.pointerId) {
+      this.mouseReportingPointerId = null;
+      this.mouseReportingButton = null;
+      this.lastMouseMotionData = "";
     }
+    if (this.linkActivationPointerId === event.pointerId) this.linkActivationPointerId = null;
   };
 
   private updateHoverCursor(event: PointerEvent): void {
@@ -1559,6 +1584,7 @@ export class GhosttyTerminalSurface {
     }
     const drag = this.selectionDrag;
     if (drag?.pointerId !== event.pointerId) return;
+    if (event.type !== "pointercancel" && (event.buttons & 1) !== 0) return;
     if (event.type !== "pointercancel" && this.selectionAnchorScreen) {
       // The release can be in a new cell without an intervening pointermove.
       const cell = this.cellAt(event.clientX, event.clientY);
@@ -1567,7 +1593,6 @@ export class GhosttyTerminalSurface {
       }
     }
     this.endSelectionDrag();
-    if (event.button !== 0) return;
     if (!drag.moved && drag.mode === "cell") {
       this.clearSelection();
     }
