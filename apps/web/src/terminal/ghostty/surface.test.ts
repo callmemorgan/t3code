@@ -67,6 +67,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       private readonly captures = new Set<number>();
 
       setAttribute() {}
+      select() {}
       append(...children: TerminalTestElement[]) {
         for (const child of children) child.parentElement = this;
       }
@@ -117,6 +118,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       }),
     };
     vi.stubGlobal("document", {
+      hasFocus: () => true,
       createElement: (tag: string) => (tag === "canvas" ? canvas : new TerminalTestElement()),
       fonts: Object.assign(new EventTarget(), { load: async () => [], add() {} }),
     });
@@ -168,16 +170,21 @@ describe("GhosttyTerminalSurface visibility", () => {
       resize() {
         for (const callback of resizeCallbacks) callback();
       },
-      pointer(type: string, clientX: number, buttons: number) {
+      pointer(type: string, clientX: number, buttons: number, shiftKey = false, clientY = 5) {
         canvas.dispatchEvent(
           Object.assign(new Event(type, { cancelable: true }), {
             clientX,
-            clientY: 5,
+            clientY,
             pointerId: 1,
             button: 0,
             buttons,
+            shiftKey,
           }),
         );
+      },
+      loseCapture() {
+        canvas.releasePointerCapture(1);
+        canvas.dispatchEvent(Object.assign(new Event("lostpointercapture"), { pointerId: 1 }));
       },
       async create(options: Partial<GhosttyTerminalSurfaceOptions> = {}) {
         const surface = await GhosttyTerminalSurface.create(mount as unknown as HTMLElement, {
@@ -208,6 +215,208 @@ describe("GhosttyTerminalSurface visibility", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  function key(
+    surface: GhosttyTerminalSurface,
+    value: string,
+    code: string,
+    modifiers: Partial<Pick<KeyboardEvent, "ctrlKey" | "shiftKey" | "altKey" | "metaKey">> = {},
+    type = "keydown",
+  ) {
+    surface.input.dispatchEvent(
+      Object.assign(new Event(type, { cancelable: true }), {
+        key: value,
+        code,
+        repeat: false,
+        isComposing: false,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        metaKey: false,
+        getModifierState: () => false,
+        ...modifiers,
+      }),
+    );
+  }
+
+  it.each(["Linux x86_64", "Win32"])(
+    "lets Ctrl+C interrupt after typing resumes on %s",
+    async (platform) => {
+      const harness = createHarness();
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { platform, clipboard: { writeText } });
+      const surface = await harness.create({ beforeKey: () => true });
+      surface.write("hello world\r\nprompt: ");
+      harness.flushFrame();
+      harness.pointer("pointerdown", 5, 1);
+      harness.pointer("pointerup", 37, 0);
+      expect(surface.getSelection()).toBe("hello");
+      key(surface, "x", "KeyX");
+      surface.write("x");
+      key(surface, "c", "KeyC", { ctrlKey: true });
+      expect(surface.getSelection()).toBe("");
+      expect(harness.onData.mock.calls).toEqual([["x"], ["\x03"]]);
+      expect(writeText).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "input",
+    "composition",
+    "native paste",
+    "menu paste",
+    "shortcut paste",
+    "forwarded shortcut",
+  ])("retires a completed selection on %s", async (path) => {
+    const harness = createHarness();
+    vi.stubGlobal("navigator", {
+      platform: "MacIntel",
+      clipboard: { readText: async () => "text" },
+    });
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write("\x1b[?2004hhello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointerup", 37, 0);
+    const paste = path.includes("paste");
+    switch (path) {
+      case "input":
+        surface.input.value = "text";
+        surface.input.dispatchEvent(new Event("input"));
+        break;
+      case "composition":
+        surface.input.dispatchEvent(new Event("compositionstart"));
+        surface.input.value = "text";
+        surface.input.dispatchEvent(Object.assign(new Event("compositionend"), { data: "text" }));
+        surface.input.dispatchEvent(
+          Object.assign(new Event("input"), { data: "text", inputType: "insertFromComposition" }),
+        );
+        break;
+      case "native paste":
+        surface.input.dispatchEvent(
+          Object.assign(new Event("paste", { cancelable: true }), {
+            clipboardData: { getData: () => "text" },
+          }),
+        );
+        break;
+      case "menu paste":
+        await surface.pasteFromClipboard(async () => "text");
+        break;
+      case "shortcut paste":
+        key(surface, "v", "KeyV", { metaKey: true });
+        await Promise.resolve();
+        break;
+      case "forwarded shortcut":
+        surface.sendUserInput("\x01");
+        break;
+    }
+    expect(surface.getSelection()).toBe("");
+    expect(harness.onData.mock.calls).toEqual([
+      [paste ? "\x1b[200~text\x1b[201~" : path === "forwarded shortcut" ? "\x01" : "text"],
+    ]);
+  });
+
+  it("preserves selection for protocol replies, modifier events and native copy", async () => {
+    const harness = createHarness();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { platform: "MacIntel", clipboard: { writeText } });
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write("hello world\x1b[>11u");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointerup", 37, 0);
+    surface.write("\x1b[5n");
+    expect(harness.onData).toHaveBeenCalledWith("\x1b[0n");
+    harness.onData.mockClear();
+    key(surface, "Shift", "ShiftLeft", { shiftKey: true });
+    key(surface, "Shift", "ShiftLeft", {}, "keyup");
+    expect(harness.onData).toHaveBeenCalledTimes(2);
+    expect(surface.getSelection()).toBe("hello");
+    key(surface, "c", "KeyC", { metaKey: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writeText).toHaveBeenCalledWith("hello");
+    expect(surface.getSelection()).toBe("hello");
+  });
+
+  it("does not let an older copy completion clear a newer selection", async () => {
+    const harness = createHarness();
+    let finishCopy!: () => void;
+    const copied = new Promise<void>((resolve) => {
+      finishCopy = resolve;
+    });
+    vi.stubGlobal("navigator", {
+      platform: "Linux x86_64",
+      clipboard: { writeText: () => copied },
+    });
+    const surface = await harness.create({ beforeKey: () => true });
+    surface.write("hello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointerup", 37, 0);
+    key(surface, "c", "KeyC", { ctrlKey: true });
+    await Promise.resolve();
+    harness.pointer("pointerdown", 53, 1);
+    harness.pointer("pointerup", 85, 0);
+    expect(surface.getSelection()).toBe("world");
+    finishCopy();
+    await copied;
+    expect(surface.getSelection()).toBe("world");
+  });
+
+  it.each([
+    "release",
+    "cancel",
+    "capture loss",
+    "hide",
+    "input blur",
+    "window blur",
+    "reset",
+    "dispose",
+  ])("stops selection autoscroll on %s", async (end) => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("hello world\r\n".repeat(20));
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointermove", 37, 1, false, 120);
+    const selected = surface.getSelection();
+    switch (end) {
+      case "release":
+        harness.pointer("pointerup", 37, 0, false, 120);
+        break;
+      case "cancel":
+        harness.pointer("pointercancel", 37, 0, false, 120);
+        break;
+      case "capture loss":
+        harness.loseCapture();
+        break;
+      case "hide":
+        surface.setVisible(false);
+        surface.setVisible(true);
+        break;
+      case "input blur":
+        surface.input.dispatchEvent(new Event("blur"));
+        break;
+      case "window blur":
+        window.dispatchEvent(new Event("blur"));
+        break;
+      case "reset":
+        surface.resetAndWrite("new session");
+        break;
+      case "dispose":
+        surface.dispose();
+        break;
+    }
+    harness.flushFrame();
+    harness.paint.mockClear();
+    vi.advanceTimersByTime(240);
+    harness.flushFrame();
+    expect(harness.paint).not.toHaveBeenCalled();
+    if (end !== "dispose") {
+      expect(surface.getSelection()).toBe(end === "reset" ? "" : selected);
+    }
   });
 
   it("stops hidden snapshots and paint while preserving live VT replies and the next cursor", async () => {
@@ -278,6 +487,91 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(surface.getSelection()).toBe("");
     expect(surface.getSelectionPosition()).toBeNull();
     expect(harness.renderedSnapshot.rowData[0]?.cells.some((cell) => cell.selected)).toBe(false);
+  });
+
+  it("finishes a native fullscreen drag after Shift is released", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("\x1b[?1049h\x1b[?1003h\x1b[?1006hhello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1, true);
+    harness.pointer("pointermove", 21, 1, true);
+    harness.pointer("pointermove", 37, 1);
+    harness.pointer("pointerup", 37, 0);
+    expect(surface.getSelection()).toBe("hello");
+    expect(harness.onData).not.toHaveBeenCalled();
+
+    // After release, normal hover reporting resumes.
+    harness.pointer("pointermove", 45, 0);
+    expect(harness.onData).toHaveBeenCalledTimes(1);
+    // Switching back to the application's selection must not leave a native
+    // selection that would intercept the next Cmd+C.
+    harness.pointer("pointerdown", 45, 1);
+    expect(surface.getSelection()).toBe("");
+    harness.pointer("pointerup", 45, 0);
+  });
+
+  it("uses the release position when a trackpad drag has no intermediate motion", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("\x1b[?1049h\x1b[?1003h\x1b[?1006hhello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1, true);
+    harness.pointer("pointerup", 37, 0);
+    expect(surface.getSelection()).toBe("hello");
+    expect(harness.onData).not.toHaveBeenCalled();
+  });
+
+  it.each([2, 3])(
+    "keeps a %s-click selection when output scrolls before release",
+    async (clicks) => {
+      const harness = createHarness();
+      const surface = await harness.create();
+      surface.write("hello world\r\nsecond line");
+      harness.flushFrame();
+      for (let click = 1; click < clicks; click += 1) {
+        harness.pointer("pointerdown", 13, 1);
+        harness.pointer("pointerup", 13, 0);
+      }
+      harness.pointer("pointerdown", 13, 1);
+      const selected = surface.getSelection();
+      expect(selected).toBe(clicks === 2 ? "hello" : "hello world");
+      surface.write("\x1b[6;1H\r\n");
+      harness.flushFrame();
+      harness.pointer("pointerup", 13, 0);
+      expect(surface.getSelection()).toBe(selected);
+    },
+  );
+
+  it("continues a native drag through fullscreen status redraws and clears it on reset", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("\x1b[?1049h\x1b[?1003h\x1b[?1006hhello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1, true);
+    harness.pointer("pointermove", 21, 1, true);
+    surface.write("\x1b[2;1Hworking\x1b[1;1H");
+    harness.flushFrame();
+    harness.pointer("pointermove", 37, 1, true);
+    harness.pointer("pointerup", 37, 0, true);
+    expect(surface.getSelection()).toBe("hello");
+    expect(harness.onData).not.toHaveBeenCalled();
+
+    surface.resetAndWrite("restored session");
+    expect(surface.getSelection()).toBe("");
+    expect(surface.getSelectionPosition()).toBeNull();
+  });
+
+  it("keeps an application drag in the application when Shift is pressed midway", async () => {
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("\x1b[?1049h\x1b[?1003h\x1b[?1006hhello world");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 5, 1);
+    harness.pointer("pointermove", 37, 1, true);
+    harness.pointer("pointerup", 37, 0, true);
+    expect(surface.getSelection()).toBe("");
+    expect(harness.onData).toHaveBeenCalledTimes(3);
   });
 
   it("stops zero-size mounts and repaints when the same size returns", async () => {
