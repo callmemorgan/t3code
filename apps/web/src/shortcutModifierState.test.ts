@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vite-plus/test";
+import { act, createElement } from "react";
+import { create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   areShortcutModifierStatesEqual,
   shortcutModifierStateAfterKeyboardEvent,
+  useShortcutModifierState,
   type ShortcutModifierState,
 } from "./shortcutModifierState";
 
@@ -11,6 +14,68 @@ const emptyState = (): ShortcutModifierState => ({
   ctrlKey: false,
   altKey: false,
   shiftKey: false,
+});
+
+describe("useShortcutModifierState", () => {
+  let renderer: ReactTestRenderer | undefined;
+
+  afterEach(() => {
+    act(() => renderer?.unmount());
+    renderer = undefined;
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["keyup", "paste", "blur"] as const)(
+    "does not render for unchanged modifiers after %s resets the state",
+    (reset) => {
+      const target = new EventTarget();
+      vi.stubGlobal("window", target);
+      vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+      const render = vi.fn();
+      function Consumer() {
+        render(useShortcutModifierState());
+        return null;
+      }
+      act(() => {
+        renderer = create(createElement(Consumer));
+      });
+      const press = (type: "keydown" | "keyup", key: string, shiftKey = false) => {
+        act(() => {
+          target.dispatchEvent(
+            Object.assign(new Event(type), {
+              key,
+              shiftKey,
+              metaKey: false,
+              ctrlKey: false,
+              altKey: false,
+            }),
+          );
+        });
+      };
+
+      press("keydown", "Shift", true);
+      expect(render).toHaveBeenLastCalledWith({ ...emptyState(), shiftKey: true });
+      if (reset === "keyup") {
+        press("keyup", "Shift");
+      } else {
+        act(() => target.dispatchEvent(new Event(reset)));
+      }
+      expect(render).toHaveBeenLastCalledWith(emptyState());
+      render.mockClear();
+
+      for (const key of "typing") {
+        press("keydown", key);
+        press("keyup", key);
+      }
+      act(() => {
+        target.dispatchEvent(new Event("paste"));
+        target.dispatchEvent(new Event("blur"));
+      });
+      expect(render).not.toHaveBeenCalled();
+      press("keydown", "Shift", true);
+      expect(render).toHaveBeenCalledExactlyOnceWith({ ...emptyState(), shiftKey: true });
+    },
+  );
 });
 
 function keyboardEventLike(type: "keydown" | "keyup", init: Partial<KeyboardEvent>): KeyboardEvent {
