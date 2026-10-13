@@ -27,6 +27,7 @@ concurrency:
   group: web-preview-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Unavailable in this fork: upstream runners and/or service credentials.
 jobs:
   deploy:
     name: Deploy web preview
@@ -34,9 +35,8 @@ jobs:
     # workflow should skip rather than fail for them. On `labeled` events, only
     # the preview label itself triggers a deploy.
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      contains(github.event.pull_request.labels.*.name, 'preview:web') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'preview:web')
+      github.repository != 'callmemorgan/t3code' &&
+      (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'preview:web') && (github.event.action != 'labeled' || github.event.label.name == 'preview:web'))
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     env:

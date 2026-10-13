@@ -41,10 +41,13 @@ permissions:
 env:
   NODE_OPTIONS: --max-old-space-size=8192
 
+# Unavailable in this fork: upstream runners and/or service credentials.
 jobs:
   ios:
     name: iPhone 6.9, iPhone 6.5, and iPad 13
-    if: inputs.platform == 'all' || inputs.platform == 'ios'
+    if: >-
+      github.repository != 'callmemorgan/t3code' &&
+      (inputs.platform == 'all' || inputs.platform == 'ios')
     runs-on: blacksmith-12vcpu-macos-26
     # Capturing every palette multiplies the device matrix by six, and only the
     # one native build is shared between them.
@@ -104,7 +107,9 @@ jobs:
 
   android:
     name: Android phone, 7-inch tablet, and 10-inch tablet
-    if: inputs.platform == 'all' || inputs.platform == 'android'
+    if: >-
+      github.repository != 'callmemorgan/t3code' &&
+      (inputs.platform == 'all' || inputs.platform == 'android')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     # Capturing every palette multiplies the device matrix by six, and only the
     # one native build is shared between them.

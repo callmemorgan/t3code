@@ -26,10 +26,13 @@ concurrency:
   # Adding an unrelated label skips the job and must not cancel a build.
   cancel-in-progress: ${{ github.event.label.name == 'preview:mac' }}
 
+# Unavailable in this fork: upstream runners and/or service credentials.
 jobs:
   build:
     name: Build preview JS bundle
-    if: github.event.label.name == 'preview:mac'
+    if: >-
+      github.repository != 'callmemorgan/t3code' &&
+      (github.event.label.name == 'preview:mac')
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:

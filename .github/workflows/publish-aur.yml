@@ -34,8 +34,10 @@ concurrency:
   group: publish-aur
   cancel-in-progress: false
 
+# Unavailable in this fork: upstream runners and/or service credentials.
 jobs:
   publish:
+    if: github.repository != 'callmemorgan/t3code'
     name: Validate and publish
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30

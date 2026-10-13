@@ -23,8 +23,10 @@ on:
 permissions:
   contents: read
 
+# Unavailable in this fork: upstream runners and/or service credentials.
 jobs:
   test:
+    if: github.repository != 'callmemorgan/t3code'
     name: Test (${{ inputs.package || 'all non-server' }})
     runs-on: blacksmith-8vcpu-windows-2025
     timeout-minutes: 45
