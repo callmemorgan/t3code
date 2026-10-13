@@ -97,8 +97,10 @@ permissions:
   actions: read
   contents: read
 
+# Unavailable in this fork: upstream runners and/or service credentials.
 jobs:
   build:
+    if: github.repository != 'callmemorgan/t3code'
     name: Build ${{ inputs.label }}
     runs-on: ${{ inputs.runner }}
     # Windows waits for the Linux CLI archive inside its own budget (see

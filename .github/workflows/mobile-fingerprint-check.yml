@@ -21,8 +21,10 @@ concurrency:
   group: mobile-fingerprint-check-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Unavailable in this fork: upstream runners and/or service credentials.
 jobs:
   fingerprint:
+    if: github.repository != 'callmemorgan/t3code'
     name: Native fingerprint diff
     runs-on: blacksmith-8vcpu-ubuntu-2404
     permissions:
