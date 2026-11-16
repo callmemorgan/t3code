@@ -1,22 +1,18 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as AcpSchema from "effect-acp/compat";
+import * as AcpErrors from "effect-acp/errors";
 import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
 import type {
   AcpAdapterV2ExtensionContext,
   AcpAdapterV2SubagentUpdate,
 } from "@t3tools/provider-acp/server/adapter";
 
-// Copilot CLI streams subagent text as plain `agent_message_chunk`s on the
-// root session. Only its opt-in raw event feed says who wrote a chunk: each
-// chunk is preceded by an `assistant.*_delta` carrying the spawning `task`
-// tool call id. Both arrive inline on the same reader, in wire order, so the
-// delta just before a chunk is that chunk's author.
+// The opt-in raw feed identifies each chunk by the preceding assistant.*_delta task call id.
 
 const COPILOT_META_KEY = "github.com/copilot";
 const COPILOT_SESSION_EVENT = "github.com/copilot/sessionEvent";
 
-/** Subscribes to the raw events subagent routing needs, and nothing else. */
 export const copilotClientCapabilitiesMeta = {
   [COPILOT_META_KEY]: {
     events: [
@@ -25,9 +21,32 @@ export const copilotClientCapabilitiesMeta = {
       "subagent.failed",
       "assistant.message_delta",
       "assistant.reasoning_delta",
+      "session.compaction_complete",
+      "assistant.turn_start",
+      "assistant.idle",
     ],
   },
 };
+
+const isAcpRequestError = Schema.is(AcpErrors.AcpRequestError);
+
+/** Copilot keeps failing every prompt with these until its process is replaced. */
+const COPILOT_LOST_SESSION_MARKERS = [
+  "session event delivery failed: session not found: ",
+  "session lock unavailable during is_session_generation_current: acquisition timed out",
+];
+
+export function isCopilotLostSessionError(error: unknown): boolean {
+  if (!isAcpRequestError(error) || error.method !== "session/prompt" || error.code !== -32603) {
+    return false;
+  }
+  // Older Copilot reports the cause in data.details; its native ACP layer (1.0.105) in the message.
+  return [error.errorMessage, record(error.data)?.details].some(
+    (text) =>
+      typeof text === "string" &&
+      COPILOT_LOST_SESSION_MARKERS.some((marker) => text.includes(marker)),
+  );
+}
 
 const CopilotSessionEvent = Schema.Struct({
   sessionId: Schema.String,
@@ -45,13 +64,10 @@ function record(value: unknown): Record<string, unknown> | undefined {
 const childSessionId = (taskToolCallId: string) => `copilot-task:${taskToolCallId}`;
 
 interface CopilotSessionAttribution {
-  /** The last raw delta, consumed by the chunk that follows it. */
   delta: { readonly kind: string; readonly text: string; readonly task?: string } | undefined;
-  /** Running subagent id to the `task` tool call that spawned it. */
   readonly taskByAgentId: Map<string, string>;
 }
 
-/** Per adapter instance; entries are keyed by root session and drop once idle. */
 export function makeCopilotSubagentRouting() {
   const sessions = new Map<string, CopilotSessionAttribution>();
   const session = (sessionId: string) => {
@@ -105,12 +121,32 @@ export function makeCopilotSubagentRouting() {
             result: typeof data.error === "string" ? data.error : null,
           });
         }
+        // Copilot sends no ACP compaction_update; agentId marks a subagent's own compaction.
+        // Older Copilot builds report a successful compaction without `outcome`.
+        case "session.compaction_complete": {
+          if (
+            event.agentId !== undefined ||
+            data.success !== true ||
+            (data.outcome !== undefined && data.outcome !== "applied")
+          ) {
+            return Effect.void;
+          }
+          return context.markSessionCompacted(event.sessionId);
+        }
+        // Copilot holds session/prompt while an attached async shell runs (github/copilot-cli#5293).
+        case "assistant.turn_start":
+        case "assistant.idle": {
+          if (event.agentId !== undefined || data.aborted === true) return Effect.void;
+          return context.reportForegroundWork({
+            sessionId: event.sessionId,
+            state: event.type === "assistant.idle" ? "idle" : "running",
+          });
+        }
         default:
           return Effect.void;
       }
     });
 
-  /** Moves a subagent's chunks and tool calls onto its own child session. */
   const normalizeSessionUpdate = (
     notification: AcpSchema.SessionNotification,
   ): AcpSchema.SessionNotification => {
@@ -149,7 +185,6 @@ export function makeCopilotSubagentRouting() {
   return { registerExtensions, normalizeSessionUpdate };
 }
 
-/** Copilot's `task` tool launches a subagent; its id names the child session. */
 export function extractCopilotSubagentUpdate(
   tool: AcpToolCallState,
 ): AcpAdapterV2SubagentUpdate | undefined {

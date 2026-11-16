@@ -37,8 +37,10 @@ concurrency:
 # Unavailable in this fork: upstream runners and/or service credentials.
 jobs:
   publish:
-    if: github.repository != 'callmemorgan/t3code'
     name: Validate and publish
+    if: >-
+      github.repository != 'callmemorgan/t3code' &&
+      (github.repository == 'pingdotgg/t3code')
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     container:
@@ -49,7 +51,7 @@ jobs:
         run: pacman -Syu --noconfirm --needed git github-cli jq namcap openssh sudo
 
       - name: Checkout packaging sources
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Create unprivileged build user
         run: |
